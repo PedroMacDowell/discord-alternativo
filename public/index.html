@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <title>Fuck Disc0rd</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main id="joinScreen" class="join-screen">
+      <section class="join-panel" aria-labelledby="joinTitle">
+        <div class="brand-row">
+          <img src="assets/mark.svg" alt="" class="brand-mark" />
+          <div>
+            <p class="eyebrow">Fuck Disc0rd</p>
+            <h1 id="joinTitle">Seus servidores</h1>
+          </div>
+        </div>
+
+        <form id="joinForm" class="join-form">
+          <label for="nameInput">Seu nome</label>
+          <input id="nameInput" name="name" type="text" maxlength="36" autocomplete="name" placeholder="Ex: Ana" required />
+
+          <div class="join-tabs" role="tablist" aria-label="Modo de entrada">
+            <button id="createModeButton" class="join-tab active" type="button" aria-pressed="true">
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+              Criar servidor
+            </button>
+            <button id="enterModeButton" class="join-tab" type="button" aria-pressed="false">
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><path d="m10 17 5-5-5-5"/><path d="M15 12H3"/></svg>
+              Entrar
+            </button>
+          </div>
+
+          <div id="createServerGroup" class="join-mode-group">
+            <label for="serverNameInput">Nome do servidor</label>
+            <input id="serverNameInput" name="serverName" type="text" maxlength="36" autocomplete="off" placeholder="Ex: Amigos da sexta" />
+          </div>
+
+          <div id="enterServerGroup" class="join-mode-group hidden">
+            <label for="serverCodeInput">Código ou link do servidor</label>
+            <div class="input-action">
+              <input id="serverCodeInput" name="serverCode" type="text" maxlength="140" autocomplete="off" placeholder="Ex: amigos-482" />
+              <button class="icon-button quiet" id="randomServerButton" type="button" aria-label="Gerar código" data-tooltip="Gerar código">
+                <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M16 3h5v5"/><path d="m21 3-7.5 7.5"/><path d="M4 20l6.5-6.5"/><path d="M15 14h6v6"/><path d="m21 20-7.5-7.5"/><path d="M4 4l5 5"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <button id="joinButton" class="primary-button" type="submit">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 11a8 8 0 0 1 16 0"/><path d="M8 11v8"/><path d="M16 11v8"/><path d="M4 19h16"/></svg>
+            <span id="joinButtonText">Criar e entrar</span>
+          </button>
+        </form>
+
+        <section class="recent-servers" aria-labelledby="recentServersTitle">
+          <div class="recent-heading">
+            <h2 id="recentServersTitle">Servidores recentes</h2>
+          </div>
+          <div id="savedServersList" class="saved-servers-list"></div>
+        </section>
+
+        <p id="joinStatus" class="join-status" role="status"></p>
+      </section>
+    </main>
+
+    <main id="appScreen" class="app-shell hidden" aria-label="Fuck Disc0rd" hidden>
+      <header class="topbar">
+        <div class="room-title">
+          <img src="assets/mark.svg" alt="" class="topbar-mark" />
+          <div>
+            <span id="connectionStatus" class="connection-status">Conectando</span>
+            <h2 id="roomLabel">Voz geral</h2>
+          </div>
+        </div>
+
+        <div class="topbar-actions">
+          <button id="copyLinkButton" class="icon-button" type="button" aria-label="Copiar convite" data-tooltip="Copiar convite">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.1 0l2-2a5 5 0 1 0-7.1-7.1l-1.1 1.1"/><path d="M14 11a5 5 0 0 0-7.1 0l-2 2A5 5 0 1 0 12 20.1l1.1-1.1"/></svg>
+          </button>
+          <button id="leaveTopButton" class="text-button danger" type="button">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 2 .7 2.9a2 2 0 0 1-.4 2.1L8.1 10a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.9.6 2.9.7a2 2 0 0 1 1.6 1.9z"/><path d="m18 2 4 4"/><path d="m22 2-4 4"/></svg>
+            Sair
+          </button>
+        </div>
+      </header>
+
+      <aside id="serverPanel" class="server-panel" aria-labelledby="serverNameLabel">
+        <div class="server-summary">
+          <div id="serverIcon" class="server-icon">P</div>
+          <div>
+            <span class="panel-kicker">Servidor</span>
+            <h3 id="serverNameLabel">Servidor</h3>
+            <p id="serverCodeLabel">codigo</p>
+          </div>
+        </div>
+
+        <div class="channel-section">
+          <span class="panel-kicker">Canais de voz</span>
+          <button id="voiceChannelButton" class="channel-row active" type="button">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M3 14a9 9 0 0 1 18 0"/><path d="M5 14h1a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2Z"/><path d="M18 14h1a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2Z"/></svg>
+            <span id="channelLabel">Voz geral</span>
+            <strong id="channelCount">1</strong>
+          </button>
+        </div>
+
+        <button id="togglePeopleButton" class="panel-heading panel-toggle compact" type="button" aria-expanded="true">
+          <h3 id="peopleTitle">Participantes</h3>
+          <span class="panel-toggle-side">
+            <span id="peopleCount" class="count-pill">1</span>
+            <svg class="chevron-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+          </span>
+        </button>
+        <div id="peopleList" class="people-list"></div>
+      </aside>
+
+      <section class="stage" aria-label="Vídeos">
+        <div id="videoGrid" class="video-grid"></div>
+      </section>
+
+      <aside id="chatPanel" class="chat-panel" aria-labelledby="chatTitle">
+        <button id="toggleChatButton" class="panel-heading panel-toggle chat-heading" type="button" aria-expanded="true">
+          <h3 id="chatTitle">Chat</h3>
+          <svg class="chevron-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+        </button>
+        <div id="messages" class="messages" aria-live="polite"></div>
+        <form id="chatForm" class="chat-form">
+          <input id="messageInput" type="text" maxlength="800" autocomplete="off" placeholder="Mensagem" />
+          <button class="icon-button send-button" type="submit" aria-label="Enviar" data-tooltip="Enviar">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
+          </button>
+        </form>
+      </aside>
+
+      <footer class="control-dock" aria-label="Controles da chamada">
+        <button id="micButton" class="control-button" type="button" aria-label="Microfone" data-tooltip="Mutar microfone" aria-pressed="true">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></svg>
+        </button>
+        <div id="micMonitor" class="mic-monitor" aria-label="Nível do microfone">
+          <span id="micStatusLabel">Microfone desligado</span>
+          <div class="mic-meter" aria-hidden="true"><span id="micMeterBar"></span></div>
+        </div>
+        <button id="noiseButton" class="control-button active" type="button" aria-label="Supressão de ruído" data-tooltip="Supressão de ruído ligada" aria-pressed="true">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M3 12h2"/><path d="M7 12h2"/><path d="M11 12h2"/><path d="M15 12h2"/><path d="M19 12h2"/><path d="M5 8v8"/><path d="M9 5v14"/><path d="M13 9v6"/><path d="M17 6v12"/><path d="M21 10v4"/></svg>
+        </button>
+        <button id="deafenButton" class="control-button" type="button" aria-label="Fone" data-tooltip="Mutar fone" aria-pressed="false">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M3 14a9 9 0 0 1 18 0"/><path d="M5 14h1a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2Z"/><path d="M18 14h1a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2Z"/></svg>
+        </button>
+        <button id="cameraButton" class="control-button" type="button" aria-label="Câmera" data-tooltip="Ligar câmera" aria-pressed="false">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M15 10l4.6-2.6A1 1 0 0 1 21 8.3v7.4a1 1 0 0 1-1.4.9L15 14"/><rect x="3" y="6" width="12" height="12" rx="2"/></svg>
+        </button>
+        <button id="screenButton" class="control-button" type="button" aria-label="Compartilhar tela" data-tooltip="Compartilhar tela" aria-pressed="false">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/><path d="m9 10 3-3 3 3"/><path d="M12 7v7"/></svg>
+        </button>
+        <button id="leaveButton" class="control-button hangup" type="button" aria-label="Encerrar chamada" data-tooltip="Encerrar chamada">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 2 .7 2.9a2 2 0 0 1-.4 2.1L8.1 10a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.9.6 2.9.7a2 2 0 0 1 1.6 1.9z"/><path d="m18 2 4 4"/><path d="m22 2-4 4"/></svg>
+        </button>
+      </footer>
+    </main>
+
+    <div id="toastStack" class="toast-stack" aria-live="polite"></div>
+    <script src="firebase-config.js" defer></script>
+    <script src="app.js" defer></script>
+  </body>
+</html>

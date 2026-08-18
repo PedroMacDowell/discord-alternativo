@@ -1,0 +1,1 @@
+window.PONTE_FIREBASE_CONFIG = null;

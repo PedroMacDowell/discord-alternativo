@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Fuck Disc0rd">
+  <defs>
+    <linearGradient id="g" x1="10" x2="54" y1="8" y2="58" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#e9b872"/>
+      <stop offset="0.55" stop-color="#55d6c2"/>
+      <stop offset="1" stop-color="#c98768"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="16" fill="#12100f"/>
+  <rect x="5" y="5" width="54" height="54" rx="13" fill="url(#g)"/>
+  <rect x="9" y="9" width="46" height="46" rx="11" fill="#191716"/>
+  <path d="M19 20h18v6H26v5h9v6h-9v9h-7V20Z" fill="#fff8ef"/>
+  <path d="M44.3 29.2c1.7 0 3.1.7 4.1 2s1.5 3.1 1.5 5.3c0 2.3-.5 4.1-1.5 5.4s-2.4 2-4.1 2-3.1-.7-4.1-2-1.5-3.1-1.5-5.4c0-2.2.5-4 1.5-5.3s2.4-2 4.1-2Zm0 4.6c-.8 0-1.2.9-1.2 2.7 0 1.9.4 2.8 1.2 2.8s1.2-.9 1.2-2.8c0-1.8-.4-2.7-1.2-2.7Z" fill="#55d6c2"/>
+  <path d="M16 49h32" stroke="#fff8ef" stroke-opacity=".24" stroke-width="2" stroke-linecap="round"/>
+</svg>

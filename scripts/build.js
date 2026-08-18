@@ -1,0 +1,40 @@
+const fs = require("fs");
+const path = require("path");
+
+const config = {
+  apiKey: pickEnv("FIREBASE_API_KEY", "VITE_FIREBASE_API_KEY"),
+  authDomain: pickEnv("FIREBASE_AUTH_DOMAIN", "VITE_FIREBASE_AUTH_DOMAIN"),
+  projectId: pickEnv("FIREBASE_PROJECT_ID", "VITE_FIREBASE_PROJECT_ID"),
+  storageBucket: pickEnv("FIREBASE_STORAGE_BUCKET", "VITE_FIREBASE_STORAGE_BUCKET"),
+  messagingSenderId: pickEnv("FIREBASE_MESSAGING_SENDER_ID", "VITE_FIREBASE_MESSAGING_SENDER_ID"),
+  appId: pickEnv("FIREBASE_APP_ID", "VITE_FIREBASE_APP_ID"),
+  measurementId: pickEnv("FIREBASE_MEASUREMENT_ID", "VITE_FIREBASE_MEASUREMENT_ID")
+};
+
+const requiredKeys = ["apiKey", "authDomain", "projectId", "appId"];
+const hasRequiredConfig = requiredKeys.every((key) => Boolean(config[key]));
+const configForBrowser = hasRequiredConfig ? removeEmptyValues(config) : null;
+const targetPath = path.join(__dirname, "..", "public", "firebase-config.js");
+
+fs.writeFileSync(
+  targetPath,
+  `window.PONTE_FIREBASE_CONFIG = ${JSON.stringify(configForBrowser, null, 2)};\n`,
+  "utf8"
+);
+
+if (hasRequiredConfig) {
+  console.log("Firebase configurado para build de produção.");
+} else {
+  console.log("Build sem Firebase: defina FIREBASE_API_KEY, FIREBASE_AUTH_DOMAIN, FIREBASE_PROJECT_ID e FIREBASE_APP_ID na Vercel.");
+}
+
+function pickEnv(...keys) {
+  for (const key of keys) {
+    if (process.env[key]) return process.env[key];
+  }
+  return "";
+}
+
+function removeEmptyValues(value) {
+  return Object.fromEntries(Object.entries(value).filter(([, item]) => Boolean(item)));
+}
