@@ -141,6 +141,12 @@
           <span id="micStatusLabel">Microfone desligado</span>
           <div class="mic-meter" aria-hidden="true"><span id="micMeterBar"></span></div>
         </div>
+        <label class="device-select mic-input-control" for="micInputSelect" aria-label="Microfone">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></svg>
+          <select id="micInputSelect" aria-label="Microfone">
+            <option value="">Microfone padrão</option>
+          </select>
+        </label>
         <button id="noiseButton" class="control-button active" type="button" aria-label="Supressão de ruído" data-tooltip="Supressão de ruído ligada" aria-pressed="true">
           <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M3 12h2"/><path d="M7 12h2"/><path d="M11 12h2"/><path d="M15 12h2"/><path d="M19 12h2"/><path d="M5 8v8"/><path d="M9 5v14"/><path d="M13 9v6"/><path d="M17 6v12"/><path d="M21 10v4"/></svg>
         </button>
