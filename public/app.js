@@ -15,6 +15,13 @@ const els = {
   joinButton: document.querySelector("#joinButton"),
   joinButtonText: document.querySelector("#joinButtonText"),
   joinStatus: document.querySelector("#joinStatus"),
+  setupMicInputSelect: document.querySelector("#setupMicInputSelect"),
+  setupAudioOutputSelect: document.querySelector("#setupAudioOutputSelect"),
+  setupMicTestButton: document.querySelector("#setupMicTestButton"),
+  setupSoundTestButton: document.querySelector("#setupSoundTestButton"),
+  setupAudioStatus: document.querySelector("#setupAudioStatus"),
+  setupMicMeterBar: document.querySelector("#setupMicMeterBar"),
+  setupAudioCard: document.querySelector(".join-audio-setup"),
   savedServersList: document.querySelector("#savedServersList"),
   roomLabel: document.querySelector("#roomLabel"),
   serverIcon: document.querySelector("#serverIcon"),
@@ -57,9 +64,10 @@ const FIREBASE_SDK_VERSION = "12.16.0";
 const HEARTBEAT_MS = 15000;
 const STALE_PEER_MS = 65000;
 
-const ICE_SERVERS = [
+const DEFAULT_ICE_SERVERS = [
   { urls: "stun:stun.l.google.com:19302" },
-  { urls: "stun:global.stun.twilio.com:3478" }
+  { urls: "stun:global.stun.twilio.com:3478" },
+  { urls: "stun:stun.cloudflare.com:3478" }
 ];
 
 const palette = ["#20c7b3", "#ff6b5f", "#f6c85f", "#8bb8ff", "#b98cff", "#7bd88f"];
@@ -95,6 +103,7 @@ const state = {
   micLevel: 0,
   outboundAudioStatsTimer: null,
   outboundAudioStats: new Map(),
+  inboundAudioStats: new Map(),
   audioConnectingTicks: 0,
   lastAutoReconnectAt: 0,
   mediaReconnectInFlight: false,
@@ -168,6 +177,10 @@ function bootstrap() {
   els.copyLinkButton.addEventListener("click", copyInviteLink);
   els.leaveButton.addEventListener("click", leaveRoom);
   els.leaveTopButton.addEventListener("click", leaveRoom);
+  els.setupMicInputSelect.addEventListener("change", changeAudioInput);
+  els.setupAudioOutputSelect.addEventListener("change", changeAudioOutput);
+  els.setupMicTestButton.addEventListener("click", testSetupMicrophone);
+  els.setupSoundTestButton.addEventListener("click", playOutputTest);
   els.toggleChatButton.addEventListener("click", toggleChatPanel);
   els.togglePeopleButton.addEventListener("click", togglePeoplePanel);
   els.micButton.addEventListener("click", toggleMicrophone);
@@ -824,6 +837,16 @@ async function prepareLocalMedia() {
     return;
   }
 
+  if (state.audioTrack?.readyState === "live") {
+    state.micEnabled = true;
+    state.audioTrack.enabled = true;
+    state.cameraTrack = null;
+    state.cameraEnabled = false;
+    startMicMonitor();
+    await refreshMediaDevices();
+    return;
+  }
+
   try {
     const stream = await getMicrophoneStream();
 
@@ -882,11 +905,31 @@ function enterApp(message) {
   els.messageInput.focus();
 }
 
+function getIceServers() {
+  const rtcConfig = window.PONTE_RTC_CONFIG || {};
+  const turnUrls = Array.isArray(rtcConfig.turnUrls)
+    ? rtcConfig.turnUrls.filter(Boolean)
+    : [];
+
+  if (!turnUrls.length || !rtcConfig.turnUsername || !rtcConfig.turnCredential) {
+    return DEFAULT_ICE_SERVERS;
+  }
+
+  return [
+    ...DEFAULT_ICE_SERVERS,
+    {
+      urls: turnUrls,
+      username: rtcConfig.turnUsername,
+      credential: rtcConfig.turnCredential
+    }
+  ];
+}
+
 function createPeer(meta, shouldOffer) {
   if (!meta?.id || meta.id === state.selfId) return state.peers.get(meta?.id);
   if (state.peers.has(meta.id)) return state.peers.get(meta.id);
 
-  const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+  const pc = new RTCPeerConnection({ iceServers: getIceServers() });
   const remoteStream = new MediaStream();
 
   const audioTransceiver = pc.addTransceiver("audio", { direction: "sendrecv" });
@@ -906,6 +949,8 @@ function createPeer(meta, shouldOffer) {
     makingOffer: false,
     reconnectTimer: null,
     lastReconnectAt: 0,
+    inboundAudioMissingTicks: 0,
+    lastInboundReconnectAt: 0,
     mediaState: {
       micEnabled: meta.mediaState?.micEnabled ?? true,
       cameraEnabled: meta.mediaState?.cameraEnabled ?? false,
@@ -1225,12 +1270,13 @@ function toggleOutputAudio() {
   toast(state.outputMuted ? "Fone mutado." : "Fone desmutado.");
 }
 
-async function changeAudioInput() {
+async function changeAudioInput(event) {
   const previousInputId = state.audioInputId;
   const previousTrack = state.audioTrack;
   const shouldEnable = state.micEnabled || !previousTrack;
 
-  state.audioInputId = els.micInputSelect.value;
+  state.audioInputId = getSelectValueFromEvent(event, state.audioInputId);
+  syncAudioInputSelects();
 
   try {
     const stream = await getMicrophoneStream();
@@ -1249,28 +1295,33 @@ async function changeAudioInput() {
     }
 
     startMicMonitor();
-    await replaceAudioForAll();
-    updateOutboundAudioStatus();
     await refreshMediaDevices();
-    updateControls();
-    renderLocalTile();
-    renderPeople();
-    sendMediaState();
-    toast("Microfone atualizado. Fale e confira o medidor.");
+
+    if (state.joined) {
+      await replaceAudioForAll();
+      updateOutboundAudioStatus();
+      updateControls();
+      renderLocalTile();
+      renderPeople();
+      sendMediaState();
+      toast("Microfone atualizado. Fale e confira o medidor.");
+    } else {
+      setSetupAudioStatus("Microfone pronto. Fale e veja a barra mexer.", "ok");
+    }
   } catch (error) {
     console.warn("Falha ao trocar microfone:", error);
     state.audioInputId = previousInputId;
     state.audioTrack = previousTrack;
-    if (els.micInputSelect) {
-      els.micInputSelect.value = state.audioInputId;
-    }
+    syncAudioInputSelects();
     toast(microphoneErrorMessage(error));
+    setSetupAudioStatus("Nao consegui usar esse microfone.", "bad");
   }
 }
 
-async function changeAudioOutput() {
+async function changeAudioOutput(event) {
   const previousOutputId = state.audioOutputId;
-  state.audioOutputId = els.audioOutputSelect.value;
+  state.audioOutputId = getSelectValueFromEvent(event, state.audioOutputId);
+  syncAudioOutputSelects();
 
   const results = await applyAudioOutputForAll();
   const failed = results.some((result) => result.status === "rejected");
@@ -1278,17 +1329,19 @@ async function changeAudioOutput() {
   if (failed) {
     console.warn("Falha ao trocar saída de áudio:", results);
     state.audioOutputId = "";
-    els.audioOutputSelect.value = "";
+    syncAudioOutputSelects();
     await applyAudioOutputForAll();
     resumeRemoteMedia();
     toast(previousOutputId
       ? "Essa saída falhou. Voltei para a saída padrão."
       : "Essa saída falhou. Mantive a saída padrão.");
+    setSetupAudioStatus("Essa saida falhou. Use a saida padrao.", "bad");
     return;
   }
 
   resumeRemoteMedia();
-  toast("Saída de áudio atualizada.");
+  toast("Saida de audio atualizada.");
+  setSetupAudioStatus("Saida pronta. Use o teste se quiser confirmar.", "ok");
 }
 
 function refreshMediaDevices() {
@@ -1298,21 +1351,59 @@ function refreshMediaDevices() {
   ]);
 }
 
+function getSelectValueFromEvent(event, fallback = "") {
+  return event?.currentTarget?.value ?? fallback ?? "";
+}
+
+function getAudioInputSelects() {
+  return [els.micInputSelect, els.setupMicInputSelect].filter(Boolean);
+}
+
+function getAudioOutputSelects() {
+  return [els.audioOutputSelect, els.setupAudioOutputSelect].filter(Boolean);
+}
+
+function setSelectsDisabled(selects, disabled) {
+  for (const select of selects) {
+    select.disabled = disabled;
+  }
+}
+
+function setDeviceOptions(selects, options, value) {
+  for (const select of selects) {
+    select.replaceChildren(...options.map((option) => option.cloneNode(true)));
+    select.value = value;
+  }
+}
+
+function syncAudioInputSelects() {
+  for (const select of getAudioInputSelects()) {
+    select.value = state.audioInputId;
+  }
+}
+
+function syncAudioOutputSelects() {
+  for (const select of getAudioOutputSelects()) {
+    select.value = state.audioOutputId;
+  }
+}
+
 async function refreshAudioInputs() {
-  if (!els.micInputSelect) return;
+  const selects = getAudioInputSelects();
+  if (!selects.length) return;
 
   const canListDevices = Boolean(navigator.mediaDevices?.enumerateDevices);
-  els.micInputSelect.disabled = !canListDevices;
+  setSelectsDisabled(selects, !canListDevices);
 
   if (!canListDevices) {
-    els.micInputSelect.replaceChildren(createOutputOption("", "Microfone padrão"));
     state.audioInputId = "";
+    setDeviceOptions(selects, [createOutputOption("", "Microfone padrao")], state.audioInputId);
     return;
   }
 
   const devices = await navigator.mediaDevices.enumerateDevices().catch(() => []);
   const inputs = devices.filter((device) => device.kind === "audioinput");
-  const options = [createOutputOption("", "Microfone padrão")];
+  const options = [createOutputOption("", "Microfone padrao")];
   const seen = new Set([""]);
 
   for (const device of inputs) {
@@ -1326,19 +1417,19 @@ async function refreshAudioInputs() {
     state.audioInputId = "";
   }
 
-  els.micInputSelect.replaceChildren(...options);
-  els.micInputSelect.value = state.audioInputId;
+  setDeviceOptions(selects, options, state.audioInputId);
 }
 
 async function refreshAudioOutputs() {
-  if (!els.audioOutputSelect) return;
+  const selects = getAudioOutputSelects();
+  if (!selects.length) return;
 
   const supported = supportsAudioOutputSelection();
-  els.audioOutputSelect.disabled = !supported;
+  setSelectsDisabled(selects, !supported);
 
   if (!supported) {
-    els.audioOutputSelect.replaceChildren(createOutputOption("", "Saída do sistema"));
     state.audioOutputId = "";
+    setDeviceOptions(selects, [createOutputOption("", "Saida do sistema")], state.audioOutputId);
     return;
   }
 
@@ -1346,13 +1437,13 @@ async function refreshAudioOutputs() {
     ? await navigator.mediaDevices.enumerateDevices().catch(() => [])
     : [];
   const outputs = devices.filter((device) => device.kind === "audiooutput");
-  const options = [createOutputOption("", "Saída padrão")];
+  const options = [createOutputOption("", "Saida padrao")];
   const seen = new Set([""]);
 
   for (const device of outputs) {
     if (!device.deviceId || device.deviceId === "default" || seen.has(device.deviceId)) continue;
     seen.add(device.deviceId);
-    const label = device.label || `Saída ${options.length}`;
+    const label = device.label || `Saida ${options.length}`;
     options.push(createOutputOption(device.deviceId, label));
   }
 
@@ -1360,8 +1451,7 @@ async function refreshAudioOutputs() {
     state.audioOutputId = "";
   }
 
-  els.audioOutputSelect.replaceChildren(...options);
-  els.audioOutputSelect.value = state.audioOutputId;
+  setDeviceOptions(selects, options, state.audioOutputId);
   await applyAudioOutputForAll();
 }
 
@@ -1393,6 +1483,44 @@ function applyAudioOutputToElement(element) {
   return element.setSinkId(sinkId);
 }
 
+function setOutputTestBusy(isBusy) {
+  for (const button of [els.testSoundButton, els.setupSoundTestButton]) {
+    if (button) {
+      button.disabled = isBusy;
+    }
+  }
+}
+
+async function testSetupMicrophone() {
+  els.setupMicTestButton.disabled = true;
+  setSetupAudioStatus("Abrindo microfone...", "warn");
+
+  try {
+    await changeAudioInput({ currentTarget: els.setupMicInputSelect });
+    if (state.audioTrack?.readyState === "live") {
+      state.micEnabled = true;
+      state.audioTrack.enabled = true;
+      startMicMonitor();
+      setSetupAudioStatus("Fale agora. Se a barra mexer, a entrada esta ok.", "ok");
+    }
+  } finally {
+    els.setupMicTestButton.disabled = false;
+  }
+}
+
+function setSetupAudioStatus(text, tone = "idle") {
+  if (!els.setupAudioStatus || !els.setupAudioCard) return;
+  els.setupAudioStatus.textContent = text;
+  els.setupAudioCard.classList.remove("status-ok", "status-warn", "status-bad");
+  if (tone === "ok") {
+    els.setupAudioCard.classList.add("status-ok");
+  } else if (tone === "warn") {
+    els.setupAudioCard.classList.add("status-warn");
+  } else if (tone === "bad") {
+    els.setupAudioCard.classList.add("status-bad");
+  }
+}
+
 async function playOutputTest() {
   const AudioContextClass = window.AudioContext || window.webkitAudioContext;
   if (!AudioContextClass) {
@@ -1400,7 +1528,7 @@ async function playOutputTest() {
     return;
   }
 
-  els.testSoundButton.disabled = true;
+  setOutputTestBusy(true);
 
   try {
     const context = new AudioContextClass();
@@ -1428,12 +1556,14 @@ async function playOutputTest() {
     await new Promise((resolve) => window.setTimeout(resolve, 520));
     destination.stream.getTracks().forEach((track) => track.stop());
     await context.close();
-    toast("Se ouviu o bip, a saída está ok.");
+    toast("Se ouviu o bip, a saida esta ok.");
+    setSetupAudioStatus("Se ouviu o bip, a saida esta ok.", "ok");
   } catch (error) {
     console.warn("Falha no teste de saída:", error);
-    toast("Não consegui tocar o teste de saída.");
+    toast("Nao consegui tocar o teste de saida.");
+    setSetupAudioStatus("Nao consegui tocar nessa saida.", "bad");
   } finally {
-    els.testSoundButton.disabled = false;
+    setOutputTestBusy(false);
   }
 }
 
@@ -1996,6 +2126,7 @@ function removePeer(peerId, showToast = true) {
     cancelPeerReconnect(peer);
     peer.pc.close();
     peer.remoteStream.getTracks().forEach((track) => track.stop());
+    clearPeerAudioStats(peerId);
     state.peers.delete(peerId);
     if (state.selectedPeerId === peerId) {
       state.selectedPeerId = null;
@@ -2014,6 +2145,20 @@ function removePeer(peerId, showToast = true) {
 
   updateOutboundAudioStatus();
   updateControls();
+}
+
+function clearPeerAudioStats(peerId) {
+  for (const key of [...state.outboundAudioStats.keys()]) {
+    if (key.startsWith(`${peerId}:`)) {
+      state.outboundAudioStats.delete(key);
+    }
+  }
+
+  for (const key of [...state.inboundAudioStats.keys()]) {
+    if (key.startsWith(`${peerId}:`)) {
+      state.inboundAudioStats.delete(key);
+    }
+  }
 }
 
 function updateControls() {
@@ -2078,7 +2223,11 @@ function applyOutputMute() {
 function startOutboundAudioMonitor() {
   stopOutboundAudioMonitor();
   updateOutboundAudioStatus();
-  state.outboundAudioStatsTimer = window.setInterval(updateOutboundAudioStatus, 1500);
+  monitorInboundAudioHealth();
+  state.outboundAudioStatsTimer = window.setInterval(() => {
+    updateOutboundAudioStatus();
+    monitorInboundAudioHealth();
+  }, 1500);
 }
 
 function stopOutboundAudioMonitor() {
@@ -2088,6 +2237,7 @@ function stopOutboundAudioMonitor() {
   }
 
   state.outboundAudioStats.clear();
+  state.inboundAudioStats.clear();
   state.audioConnectingTicks = 0;
   state.lastAutoReconnectAt = 0;
   setCallAudioStatus("Usando padrão do sistema", "idle");
@@ -2187,6 +2337,75 @@ async function readOutboundAudioStats(peer) {
   });
 
   return { hasReport, sent };
+}
+
+async function monitorInboundAudioHealth() {
+  if (!state.joined || !state.peers.size) return;
+
+  const results = await Promise.allSettled([...state.peers.values()].map(readInboundAudioStats));
+
+  for (const result of results) {
+    if (result.status !== "fulfilled" || !result.value?.peer) continue;
+
+    const { peer, hasReport, receiving } = result.value;
+    const expectsAudio = peer.mediaState?.micEnabled !== false;
+
+    if (!expectsAudio || peer.pc.connectionState === "closed") {
+      peer.inboundAudioMissingTicks = 0;
+      continue;
+    }
+
+    if (receiving || !hasReport) {
+      peer.inboundAudioMissingTicks = receiving ? 0 : peer.inboundAudioMissingTicks + 1;
+    } else {
+      peer.inboundAudioMissingTicks += 1;
+    }
+
+    if (peer.inboundAudioMissingTicks < 6) continue;
+
+    const now = Date.now();
+    if (now - (peer.lastInboundReconnectAt || 0) < 18000) continue;
+
+    peer.lastInboundReconnectAt = now;
+    peer.inboundAudioMissingTicks = 0;
+    schedulePeerReconnect(peer, "inbound-audio", 500);
+  }
+}
+
+async function readInboundAudioStats(peer) {
+  if (!peer?.pc?.getStats) {
+    return { peer, hasReport: false, receiving: false };
+  }
+
+  const stats = await peer.pc.getStats();
+  let hasReport = false;
+  let receiving = false;
+
+  stats.forEach((report) => {
+    const isInboundAudio = report.type === "inbound-rtp"
+      && !report.isRemote
+      && (report.kind === "audio" || report.mediaType === "audio");
+
+    if (!isInboundAudio) return;
+
+    hasReport = true;
+    const key = `${peer.id}:${report.id}`;
+    const previous = state.inboundAudioStats.get(key);
+    const bytesReceived = Number(report.bytesReceived || 0);
+    const packetsReceived = Number(report.packetsReceived || 0);
+
+    if (previous) {
+      const byteDelta = bytesReceived - previous.bytesReceived;
+      const packetDelta = packetsReceived - previous.packetsReceived;
+      if (byteDelta > 0 || packetDelta > 0) {
+        receiving = true;
+      }
+    }
+
+    state.inboundAudioStats.set(key, { bytesReceived, packetsReceived });
+  });
+
+  return { peer, hasReport, receiving };
 }
 
 function setCallAudioStatus(text, tone = "idle") {
@@ -2289,20 +2508,28 @@ function updateMicMonitorDisplay(forcedText = "") {
   const missing = !hasMic;
 
   els.micMeterBar.style.transform = `scaleX(${level})`;
+  if (els.setupMicMeterBar) {
+    els.setupMicMeterBar.style.transform = `scaleX(${level})`;
+  }
   els.micMonitor.classList.toggle("active", active);
   els.micMonitor.classList.toggle("muted", muted);
   els.micMonitor.classList.toggle("missing", missing);
 
   if (forcedText) {
     els.micStatusLabel.textContent = forcedText;
+    setSetupAudioStatus(forcedText, "warn");
   } else if (missing) {
     els.micStatusLabel.textContent = "Sem microfone";
+    setSetupAudioStatus("Teste o microfone antes de entrar.", "warn");
   } else if (muted) {
     els.micStatusLabel.textContent = "Microfone mutado";
+    setSetupAudioStatus("Microfone mutado.", "bad");
   } else if (active) {
     els.micStatusLabel.textContent = "Microfone captando";
+    setSetupAudioStatus("Microfone captando.", "ok");
   } else {
     els.micStatusLabel.textContent = "Fale para testar";
+    setSetupAudioStatus("Fale para testar o microfone.", "warn");
   }
 
   const localTile = state.tiles.get("local");

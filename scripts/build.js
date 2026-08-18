@@ -11,14 +11,26 @@ const config = {
   measurementId: pickEnv("FIREBASE_MEASUREMENT_ID", "VITE_FIREBASE_MEASUREMENT_ID")
 };
 
+const rtcConfig = {
+  turnUrls: splitEnv("RTC_TURN_URLS", "TURN_URLS", "VITE_RTC_TURN_URLS"),
+  turnUsername: pickEnv("RTC_TURN_USERNAME", "TURN_USERNAME", "VITE_RTC_TURN_USERNAME"),
+  turnCredential: pickEnv("RTC_TURN_CREDENTIAL", "TURN_CREDENTIAL", "VITE_RTC_TURN_CREDENTIAL")
+};
+
 const requiredKeys = ["apiKey", "authDomain", "projectId", "appId"];
 const hasRequiredConfig = requiredKeys.every((key) => Boolean(config[key]));
 const configForBrowser = hasRequiredConfig ? removeEmptyValues(config) : null;
+const hasTurnConfig = Boolean(rtcConfig.turnUrls.length && rtcConfig.turnUsername && rtcConfig.turnCredential);
+const rtcConfigForBrowser = hasTurnConfig ? rtcConfig : null;
 const targetPath = path.join(__dirname, "..", "public", "firebase-config.js");
 
 fs.writeFileSync(
   targetPath,
-  `window.PONTE_FIREBASE_CONFIG = ${JSON.stringify(configForBrowser, null, 2)};\n`,
+  [
+    `window.PONTE_FIREBASE_CONFIG = ${JSON.stringify(configForBrowser, null, 2)};`,
+    `window.PONTE_RTC_CONFIG = ${JSON.stringify(rtcConfigForBrowser, null, 2)};`,
+    ""
+  ].join("\n"),
   "utf8"
 );
 
@@ -28,11 +40,24 @@ if (hasRequiredConfig) {
   console.log("Build sem Firebase: defina FIREBASE_API_KEY, FIREBASE_AUTH_DOMAIN, FIREBASE_PROJECT_ID e FIREBASE_APP_ID na Vercel.");
 }
 
+if (hasTurnConfig) {
+  console.log("TURN configurado para WebRTC.");
+} else {
+  console.log("Build sem TURN: STUN sera usado; configure RTC_TURN_URLS, RTC_TURN_USERNAME e RTC_TURN_CREDENTIAL para redes restritas.");
+}
+
 function pickEnv(...keys) {
   for (const key of keys) {
     if (process.env[key]) return process.env[key];
   }
   return "";
+}
+
+function splitEnv(...keys) {
+  const value = pickEnv(...keys);
+  return value
+    ? value.split(",").map((item) => item.trim()).filter(Boolean)
+    : [];
 }
 
 function removeEmptyValues(value) {
