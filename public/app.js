@@ -39,10 +39,12 @@ const els = {
   micMonitor: document.querySelector("#micMonitor"),
   micMeterBar: document.querySelector("#micMeterBar"),
   micStatusLabel: document.querySelector("#micStatusLabel"),
+  callAudioStatus: document.querySelector("#callAudioStatus"),
   micInputSelect: document.querySelector("#micInputSelect"),
   noiseButton: document.querySelector("#noiseButton"),
   deafenButton: document.querySelector("#deafenButton"),
   audioOutputSelect: document.querySelector("#audioOutputSelect"),
+  testSoundButton: document.querySelector("#testSoundButton"),
   cameraButton: document.querySelector("#cameraButton"),
   screenButton: document.querySelector("#screenButton"),
   leaveButton: document.querySelector("#leaveButton"),
@@ -80,14 +82,16 @@ const state = {
   cameraEnabled: false,
   micEnabled: false,
   noiseSuppressionEnabled: true,
-  audioInputId: localStorage.getItem("fuckdisc0rd.audioInputId") || "",
+  audioInputId: "",
   outputMuted: false,
-  audioOutputId: localStorage.getItem("fuckdisc0rd.audioOutputId") || "",
+  audioOutputId: "",
   audioContext: null,
   micSource: null,
   micAnalyser: null,
   micMeterFrame: null,
   micLevel: 0,
+  outboundAudioStatsTimer: null,
+  outboundAudioStats: new Map(),
   audioUnlockToastShown: false,
   chatCollapsed: false,
   chatUnread: false,
@@ -115,6 +119,8 @@ function bootstrap() {
   els.serverCodeInput.value = serverFromUrl;
   state.chatCollapsed = localStorage.getItem("fuckdisc0rd.chatCollapsed") === "true";
   state.peopleCollapsed = localStorage.getItem("fuckdisc0rd.peopleCollapsed") === "true";
+  localStorage.removeItem("fuckdisc0rd.audioInputId");
+  localStorage.removeItem("fuckdisc0rd.audioOutputId");
   setJoinMode(serverFromUrl ? "enter" : "create");
   renderSavedServers();
   applyPanelState();
@@ -161,6 +167,7 @@ function bootstrap() {
   els.noiseButton.addEventListener("click", toggleNoiseSuppression);
   els.deafenButton.addEventListener("click", toggleOutputAudio);
   els.audioOutputSelect.addEventListener("change", changeAudioOutput);
+  els.testSoundButton.addEventListener("click", playOutputTest);
   els.cameraButton.addEventListener("click", toggleCamera);
   els.screenButton.addEventListener("click", toggleScreenShare);
   els.chatForm.addEventListener("submit", sendChatMessage);
@@ -758,7 +765,6 @@ async function getMicrophoneStream() {
 
     console.warn("Falha ao usar microfone selecionado, tentando padrão:", error);
     state.audioInputId = "";
-    localStorage.setItem("fuckdisc0rd.audioInputId", "");
     await refreshAudioInputs();
 
     return navigator.mediaDevices.getUserMedia({
@@ -850,6 +856,7 @@ function enterApp(message) {
     createPeer(peer, true);
   }
 
+  startOutboundAudioMonitor();
   els.messageInput.focus();
 }
 
@@ -920,6 +927,7 @@ function createPeer(meta, shouldOffer) {
 
   renderPeople();
   updateTile(peer.id);
+  updateOutboundAudioStatus();
 
   if (shouldOffer) {
     makeOffer(peer);
@@ -1039,6 +1047,7 @@ async function toggleMicrophone() {
   }
 
   await replaceAudioForAll();
+  updateOutboundAudioStatus();
   updateControls();
   renderLocalTile();
   renderPeople();
@@ -1073,6 +1082,7 @@ async function toggleNoiseSuppression() {
       oldTrack.stop();
       startMicMonitor();
       await replaceAudioForAll();
+      updateOutboundAudioStatus();
       renderLocalTile();
       renderPeople();
       sendMediaState();
@@ -1100,7 +1110,6 @@ async function changeAudioInput() {
   const shouldEnable = state.micEnabled || !previousTrack;
 
   state.audioInputId = els.micInputSelect.value;
-  localStorage.setItem("fuckdisc0rd.audioInputId", state.audioInputId);
 
   try {
     const stream = await getMicrophoneStream();
@@ -1120,6 +1129,7 @@ async function changeAudioInput() {
 
     startMicMonitor();
     await replaceAudioForAll();
+    updateOutboundAudioStatus();
     await refreshMediaDevices();
     updateControls();
     renderLocalTile();
@@ -1130,7 +1140,6 @@ async function changeAudioInput() {
     console.warn("Falha ao trocar microfone:", error);
     state.audioInputId = previousInputId;
     state.audioTrack = previousTrack;
-    localStorage.setItem("fuckdisc0rd.audioInputId", state.audioInputId);
     if (els.micInputSelect) {
       els.micInputSelect.value = state.audioInputId;
     }
@@ -1139,14 +1148,21 @@ async function changeAudioInput() {
 }
 
 async function changeAudioOutput() {
+  const previousOutputId = state.audioOutputId;
   state.audioOutputId = els.audioOutputSelect.value;
-  localStorage.setItem("fuckdisc0rd.audioOutputId", state.audioOutputId);
 
   const results = await applyAudioOutputForAll();
   const failed = results.some((result) => result.status === "rejected");
 
   if (failed) {
-    toast("Não consegui trocar a saída de áudio neste navegador.");
+    console.warn("Falha ao trocar saída de áudio:", results);
+    state.audioOutputId = "";
+    els.audioOutputSelect.value = "";
+    await applyAudioOutputForAll();
+    resumeRemoteMedia();
+    toast(previousOutputId
+      ? "Essa saída falhou. Voltei para a saída padrão."
+      : "Essa saída falhou. Mantive a saída padrão.");
     return;
   }
 
@@ -1179,17 +1195,14 @@ async function refreshAudioInputs() {
   const seen = new Set([""]);
 
   for (const device of inputs) {
-    if (!device.deviceId || seen.has(device.deviceId)) continue;
+    if (!device.deviceId || device.deviceId === "default" || seen.has(device.deviceId)) continue;
     seen.add(device.deviceId);
-    const label = device.deviceId === "default"
-      ? "Padrão do sistema"
-      : (device.label || `Microfone ${options.length}`);
+    const label = device.label || `Microfone ${options.length}`;
     options.push(createOutputOption(device.deviceId, label));
   }
 
   if (!seen.has(state.audioInputId)) {
     state.audioInputId = "";
-    localStorage.setItem("fuckdisc0rd.audioInputId", "");
   }
 
   els.micInputSelect.replaceChildren(...options);
@@ -1216,17 +1229,14 @@ async function refreshAudioOutputs() {
   const seen = new Set([""]);
 
   for (const device of outputs) {
-    if (!device.deviceId || seen.has(device.deviceId)) continue;
+    if (!device.deviceId || device.deviceId === "default" || seen.has(device.deviceId)) continue;
     seen.add(device.deviceId);
-    const label = device.deviceId === "default"
-      ? "Padrão do sistema"
-      : (device.label || `Saída ${options.length}`);
+    const label = device.label || `Saída ${options.length}`;
     options.push(createOutputOption(device.deviceId, label));
   }
 
   if (!seen.has(state.audioOutputId)) {
     state.audioOutputId = "";
-    localStorage.setItem("fuckdisc0rd.audioOutputId", "");
   }
 
   els.audioOutputSelect.replaceChildren(...options);
@@ -1260,6 +1270,50 @@ function applyAudioOutputToElement(element) {
   const sinkId = state.audioOutputId || "";
   if (element.sinkId === sinkId) return Promise.resolve();
   return element.setSinkId(sinkId);
+}
+
+async function playOutputTest() {
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) {
+    toast("Teste de saída indisponível neste navegador.");
+    return;
+  }
+
+  els.testSoundButton.disabled = true;
+
+  try {
+    const context = new AudioContextClass();
+    const destination = context.createMediaStreamDestination();
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    const audio = new Audio();
+
+    audio.srcObject = destination.stream;
+    audio.volume = 1;
+    oscillator.type = "sine";
+    oscillator.frequency.setValueAtTime(620, context.currentTime);
+    gain.gain.setValueAtTime(0.0001, context.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.08, context.currentTime + 0.03);
+    gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.42);
+
+    oscillator.connect(gain);
+    gain.connect(destination);
+
+    await applyAudioOutputToElement(audio);
+    await audio.play();
+    oscillator.start();
+    oscillator.stop(context.currentTime + 0.44);
+
+    await new Promise((resolve) => window.setTimeout(resolve, 520));
+    destination.stream.getTracks().forEach((track) => track.stop());
+    await context.close();
+    toast("Se ouviu o bip, a saída está ok.");
+  } catch (error) {
+    console.warn("Falha no teste de saída:", error);
+    toast("Não consegui tocar o teste de saída.");
+  } finally {
+    els.testSoundButton.disabled = false;
+  }
 }
 
 function getPeerAudioPrefs(peerId) {
@@ -1811,6 +1865,8 @@ function removePeer(peerId, showToast = true) {
     state.tiles.delete(peerId);
     updateStageLayout();
   }
+
+  updateOutboundAudioStatus();
 }
 
 function updateControls() {
@@ -1854,6 +1910,115 @@ function applyOutputMute() {
 
   if (!state.outputMuted) {
     resumeRemoteMedia();
+  }
+}
+
+function startOutboundAudioMonitor() {
+  stopOutboundAudioMonitor();
+  updateOutboundAudioStatus();
+  state.outboundAudioStatsTimer = window.setInterval(updateOutboundAudioStatus, 1500);
+}
+
+function stopOutboundAudioMonitor() {
+  if (state.outboundAudioStatsTimer) {
+    window.clearInterval(state.outboundAudioStatsTimer);
+    state.outboundAudioStatsTimer = null;
+  }
+
+  state.outboundAudioStats.clear();
+  setCallAudioStatus("Usando padrão do sistema", "idle");
+}
+
+async function updateOutboundAudioStatus() {
+  if (!els.callAudioStatus) return;
+
+  const hasMic = Boolean(state.audioTrack && state.audioTrack.readyState === "live");
+
+  if (!state.joined) {
+    setCallAudioStatus("Usando padrão do sistema", "idle");
+    return;
+  }
+
+  if (!hasMic) {
+    setCallAudioStatus("Sem microfone ativo", "bad");
+    return;
+  }
+
+  if (!state.micEnabled) {
+    setCallAudioStatus("Microfone mutado", "bad");
+    return;
+  }
+
+  if (!state.peers.size) {
+    setCallAudioStatus("Microfone ok • aguardando amigos", "ok");
+    return;
+  }
+
+  const results = await Promise.allSettled([...state.peers.values()].map(readOutboundAudioStats));
+  const values = results
+    .filter((result) => result.status === "fulfilled")
+    .map((result) => result.value);
+  const hasReport = values.some((value) => value?.hasReport);
+  const isSending = values.some((value) => value?.sent);
+
+  if (isSending) {
+    setCallAudioStatus("Voz saindo para a chamada", "ok");
+  } else if (hasReport && state.micLevel > 0.08) {
+    setCallAudioStatus("Captando • aguardando envio", "warn");
+  } else if (hasReport) {
+    setCallAudioStatus("Fale para validar envio", "idle");
+  } else {
+    setCallAudioStatus("Conectando áudio...", "warn");
+  }
+}
+
+async function readOutboundAudioStats(peer) {
+  const sender = peer.audioSender;
+  if (!sender?.getStats || !sender.track) {
+    return { hasReport: false, sent: false };
+  }
+
+  const stats = await sender.getStats();
+  let hasReport = false;
+  let sent = false;
+
+  stats.forEach((report) => {
+    const isOutboundAudio = report.type === "outbound-rtp"
+      && !report.isRemote
+      && (report.kind === "audio" || report.mediaType === "audio");
+
+    if (!isOutboundAudio) return;
+
+    hasReport = true;
+    const key = `${peer.id}:${report.id}`;
+    const previous = state.outboundAudioStats.get(key);
+    const bytesSent = Number(report.bytesSent || 0);
+    const packetsSent = Number(report.packetsSent || 0);
+
+    if (previous) {
+      const byteDelta = bytesSent - previous.bytesSent;
+      const packetDelta = packetsSent - previous.packetsSent;
+      if (byteDelta > 0 || packetDelta > 0) {
+        sent = true;
+      }
+    }
+
+    state.outboundAudioStats.set(key, { bytesSent, packetsSent });
+  });
+
+  return { hasReport, sent };
+}
+
+function setCallAudioStatus(text, tone = "idle") {
+  if (!els.callAudioStatus) return;
+  els.callAudioStatus.textContent = text;
+  els.micMonitor?.classList.remove("send-ok", "send-warn", "send-bad");
+  if (tone === "ok") {
+    els.micMonitor?.classList.add("send-ok");
+  } else if (tone === "warn") {
+    els.micMonitor?.classList.add("send-warn");
+  } else if (tone === "bad") {
+    els.micMonitor?.classList.add("send-bad");
   }
 }
 
@@ -2014,6 +2179,7 @@ async function leaveRoom() {
   }
 
   stopAllMedia();
+  stopOutboundAudioMonitor();
 
   state.selfId = null;
   state.joined = false;
