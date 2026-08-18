@@ -1255,6 +1255,14 @@ input:focus {
   color: var(--muted);
 }
 
+.mic-input-control {
+  width: clamp(158px, 15vw, 224px);
+}
+
+.audio-output-control {
+  width: clamp(178px, 17vw, 250px);
+}
+
 .device-select svg {
   flex: 0 0 auto;
   width: 19px;

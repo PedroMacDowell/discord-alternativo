@@ -39,6 +39,7 @@ const els = {
   micMonitor: document.querySelector("#micMonitor"),
   micMeterBar: document.querySelector("#micMeterBar"),
   micStatusLabel: document.querySelector("#micStatusLabel"),
+  micInputSelect: document.querySelector("#micInputSelect"),
   noiseButton: document.querySelector("#noiseButton"),
   deafenButton: document.querySelector("#deafenButton"),
   audioOutputSelect: document.querySelector("#audioOutputSelect"),
@@ -79,6 +80,7 @@ const state = {
   cameraEnabled: false,
   micEnabled: false,
   noiseSuppressionEnabled: true,
+  audioInputId: localStorage.getItem("fuckdisc0rd.audioInputId") || "",
   outputMuted: false,
   audioOutputId: localStorage.getItem("fuckdisc0rd.audioOutputId") || "",
   audioContext: null,
@@ -116,7 +118,7 @@ function bootstrap() {
   setJoinMode(serverFromUrl ? "enter" : "create");
   renderSavedServers();
   applyPanelState();
-  refreshAudioOutputs();
+  refreshMediaDevices();
 
   els.joinForm.addEventListener("submit", joinRoom);
   els.createModeButton.addEventListener("click", () => setJoinMode("create"));
@@ -155,6 +157,7 @@ function bootstrap() {
   els.toggleChatButton.addEventListener("click", toggleChatPanel);
   els.togglePeopleButton.addEventListener("click", togglePeoplePanel);
   els.micButton.addEventListener("click", toggleMicrophone);
+  els.micInputSelect.addEventListener("change", changeAudioInput);
   els.noiseButton.addEventListener("click", toggleNoiseSuppression);
   els.deafenButton.addEventListener("click", toggleOutputAudio);
   els.audioOutputSelect.addEventListener("change", changeAudioOutput);
@@ -168,7 +171,7 @@ function bootstrap() {
       resumeRemoteMedia();
     }
   });
-  navigator.mediaDevices?.addEventListener?.("devicechange", refreshAudioOutputs);
+  navigator.mediaDevices?.addEventListener?.("devicechange", refreshMediaDevices);
 
   window.addEventListener("beforeunload", () => {
     state.transport?.leave?.(true);
@@ -722,15 +725,68 @@ function dispatchServerMessage(message) {
 function getAudioConstraints() {
   const supported = navigator.mediaDevices?.getSupportedConstraints?.() || {};
 
-  return {
+  const constraints = {
     echoCancellation: true,
     noiseSuppression: supported.noiseSuppression ? state.noiseSuppressionEnabled : undefined,
     autoGainControl: supported.autoGainControl ? true : undefined
   };
+
+  if (state.audioInputId) {
+    constraints.deviceId = { exact: state.audioInputId };
+  }
+
+  return constraints;
 }
 
 function supportsNoiseSuppression() {
   return Boolean(navigator.mediaDevices?.getSupportedConstraints?.()?.noiseSuppression);
+}
+
+async function getMicrophoneStream() {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    throw new Error("media-devices-unavailable");
+  }
+
+  try {
+    return await navigator.mediaDevices.getUserMedia({
+      audio: getAudioConstraints()
+    });
+  } catch (error) {
+    if (!state.audioInputId) {
+      throw error;
+    }
+
+    console.warn("Falha ao usar microfone selecionado, tentando padrão:", error);
+    state.audioInputId = "";
+    localStorage.setItem("fuckdisc0rd.audioInputId", "");
+    await refreshAudioInputs();
+
+    return navigator.mediaDevices.getUserMedia({
+      audio: getAudioConstraints()
+    });
+  }
+}
+
+function microphoneErrorMessage(error) {
+  const name = error?.name || error?.message || "";
+
+  if (name === "NotAllowedError" || name === "SecurityError") {
+    return "Permissão do microfone bloqueada. Libere o microfone no cadeado do navegador.";
+  }
+
+  if (name === "NotFoundError" || name === "DevicesNotFoundError") {
+    return "Não encontrei um microfone disponível neste dispositivo.";
+  }
+
+  if (name === "NotReadableError" || name === "TrackStartError") {
+    return "O microfone está ocupado ou travado. Feche outro app usando áudio e tente de novo.";
+  }
+
+  if (name === "OverconstrainedError" || name === "ConstraintNotSatisfiedError") {
+    return "Esse microfone não respondeu. Tente escolher outro na lista.";
+  }
+
+  return "Não consegui ativar o microfone. Tente escolher outro microfone na lista.";
 }
 
 async function prepareLocalMedia() {
@@ -741,9 +797,7 @@ async function prepareLocalMedia() {
   }
 
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: getAudioConstraints()
-    });
+    const stream = await getMicrophoneStream();
 
     state.audioTrack = stream.getAudioTracks()[0] || null;
     state.micEnabled = Boolean(state.audioTrack);
@@ -754,14 +808,14 @@ async function prepareLocalMedia() {
       state.audioTrack.enabled = true;
       startMicMonitor();
     }
-    await refreshAudioOutputs();
+    await refreshMediaDevices();
   } catch (error) {
     console.warn("Falha ao acessar mídia local:", error);
     state.micEnabled = false;
     state.cameraEnabled = false;
     updateMicMonitorDisplay();
-    toast("Você entrou sem microfone. Dá para ativar pelo botão de microfone.");
-    await refreshAudioOutputs();
+    toast(microphoneErrorMessage(error));
+    await refreshMediaDevices();
   }
 }
 
@@ -966,18 +1020,16 @@ function replaceVideoForAll() {
 async function toggleMicrophone() {
   if (!state.audioTrack || state.audioTrack.readyState === "ended") {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: getAudioConstraints()
-      });
+      const stream = await getMicrophoneStream();
       state.audioTrack = stream.getAudioTracks()[0] || null;
       state.micEnabled = Boolean(state.audioTrack);
       if (state.audioTrack) {
         state.audioTrack.enabled = true;
         startMicMonitor();
-        await refreshAudioOutputs();
+        await refreshMediaDevices();
       }
-    } catch {
-      toast("Não consegui ativar o microfone.");
+    } catch (error) {
+      toast(microphoneErrorMessage(error));
       updateMicMonitorDisplay();
       return;
     }
@@ -1012,9 +1064,7 @@ async function toggleNoiseSuppression() {
   const oldTrack = state.audioTrack;
 
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: getAudioConstraints()
-    });
+    const stream = await getMicrophoneStream();
     state.audioTrack = stream.getAudioTracks()[0] || null;
     state.micEnabled = Boolean(state.audioTrack && wasEnabled);
 
@@ -1044,6 +1094,50 @@ function toggleOutputAudio() {
   toast(state.outputMuted ? "Fone mutado." : "Fone desmutado.");
 }
 
+async function changeAudioInput() {
+  const previousInputId = state.audioInputId;
+  const previousTrack = state.audioTrack;
+  const shouldEnable = state.micEnabled || !previousTrack;
+
+  state.audioInputId = els.micInputSelect.value;
+  localStorage.setItem("fuckdisc0rd.audioInputId", state.audioInputId);
+
+  try {
+    const stream = await getMicrophoneStream();
+    const track = stream.getAudioTracks()[0] || null;
+
+    if (!track) {
+      throw new Error("no-audio-track");
+    }
+
+    state.audioTrack = track;
+    state.micEnabled = shouldEnable;
+    state.audioTrack.enabled = shouldEnable;
+
+    if (previousTrack && previousTrack !== state.audioTrack && previousTrack.readyState === "live") {
+      previousTrack.stop();
+    }
+
+    startMicMonitor();
+    await replaceAudioForAll();
+    await refreshMediaDevices();
+    updateControls();
+    renderLocalTile();
+    renderPeople();
+    sendMediaState();
+    toast("Microfone atualizado. Fale e confira o medidor.");
+  } catch (error) {
+    console.warn("Falha ao trocar microfone:", error);
+    state.audioInputId = previousInputId;
+    state.audioTrack = previousTrack;
+    localStorage.setItem("fuckdisc0rd.audioInputId", state.audioInputId);
+    if (els.micInputSelect) {
+      els.micInputSelect.value = state.audioInputId;
+    }
+    toast(microphoneErrorMessage(error));
+  }
+}
+
 async function changeAudioOutput() {
   state.audioOutputId = els.audioOutputSelect.value;
   localStorage.setItem("fuckdisc0rd.audioOutputId", state.audioOutputId);
@@ -1058,6 +1152,48 @@ async function changeAudioOutput() {
 
   resumeRemoteMedia();
   toast("Saída de áudio atualizada.");
+}
+
+function refreshMediaDevices() {
+  return Promise.allSettled([
+    refreshAudioInputs(),
+    refreshAudioOutputs()
+  ]);
+}
+
+async function refreshAudioInputs() {
+  if (!els.micInputSelect) return;
+
+  const canListDevices = Boolean(navigator.mediaDevices?.enumerateDevices);
+  els.micInputSelect.disabled = !canListDevices;
+
+  if (!canListDevices) {
+    els.micInputSelect.replaceChildren(createOutputOption("", "Microfone padrão"));
+    state.audioInputId = "";
+    return;
+  }
+
+  const devices = await navigator.mediaDevices.enumerateDevices().catch(() => []);
+  const inputs = devices.filter((device) => device.kind === "audioinput");
+  const options = [createOutputOption("", "Microfone padrão")];
+  const seen = new Set([""]);
+
+  for (const device of inputs) {
+    if (!device.deviceId || seen.has(device.deviceId)) continue;
+    seen.add(device.deviceId);
+    const label = device.deviceId === "default"
+      ? "Padrão do sistema"
+      : (device.label || `Microfone ${options.length}`);
+    options.push(createOutputOption(device.deviceId, label));
+  }
+
+  if (!seen.has(state.audioInputId)) {
+    state.audioInputId = "";
+    localStorage.setItem("fuckdisc0rd.audioInputId", "");
+  }
+
+  els.micInputSelect.replaceChildren(...options);
+  els.micInputSelect.value = state.audioInputId;
 }
 
 async function refreshAudioOutputs() {
