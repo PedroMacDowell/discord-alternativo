@@ -104,6 +104,7 @@ function attachClient(socket, req) {
   const client = {
     id: createId(),
     name: "Convidado",
+    sessionId: "",
     color: colorFromSeed(crypto.randomBytes(2).readUInt16BE(0)),
     mediaState: {
       micEnabled: false,
@@ -197,6 +198,7 @@ function handleMessage(client, raw) {
     const roomId = normalizeRoomId(message.roomId);
     const name = normalizeName(message.name);
     const stableClientId = normalizeClientId(message.clientId);
+    const sessionId = normalizeClientId(message.sessionId) || createId();
 
     if (!roomId) {
       send(client, { type: "error", message: "Sala inválida." });
@@ -213,6 +215,7 @@ function handleMessage(client, raw) {
 
     client.roomId = roomId;
     client.name = name || "Convidado";
+    client.sessionId = sessionId;
     client.color = normalizeColor(message.color) || colorFromSeed(Math.abs(hashCode(client.id)));
 
     if (!rooms.has(roomId)) {
@@ -246,6 +249,7 @@ function handleMessage(client, raw) {
     send(target, {
       type: "signal",
       from: client.id,
+      fromSessionId: client.sessionId,
       signalType: message.signalType,
       data: message.data
     });
@@ -292,6 +296,7 @@ function publicClient(client) {
   return {
     id: client.id,
     name: client.name,
+    sessionId: client.sessionId,
     color: client.color,
     clientId: client.id,
     mediaState: client.mediaState,
