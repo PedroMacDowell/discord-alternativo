@@ -58,10 +58,12 @@ const ICE_SERVERS = [
 ];
 
 const palette = ["#20c7b3", "#ff6b5f", "#f6c85f", "#8bb8ff", "#b98cff", "#7bd88f"];
+const CLIENT_ID = getOrCreateClientId();
 
 const state = {
   transport: null,
   selfId: null,
+  clientId: CLIENT_ID,
   joinMode: "create",
   serverId: "",
   serverName: "",
@@ -70,7 +72,7 @@ const state = {
   channelName: "Voz geral",
   roomId: "",
   userName: "",
-  color: palette[Math.floor(Math.random() * palette.length)],
+  color: colorForId(CLIENT_ID),
   cameraTrack: null,
   audioTrack: null,
   screenTrack: null,
@@ -88,6 +90,8 @@ const state = {
   chatCollapsed: false,
   chatUnread: false,
   peopleCollapsed: false,
+  selectedPeerId: null,
+  peerAudioPrefs: new Map(),
   peers: new Map(),
   tiles: new Map(),
   joined: false
@@ -142,6 +146,9 @@ function bootstrap() {
     setJoinMode("enter");
   });
 
+  els.peopleList.addEventListener("click", handlePeopleClick);
+  els.peopleList.addEventListener("input", handlePeopleInput);
+  els.peopleList.addEventListener("change", handlePeopleChange);
   els.copyLinkButton.addEventListener("click", copyInviteLink);
   els.leaveButton.addEventListener("click", leaveRoom);
   els.leaveTopButton.addEventListener("click", leaveRoom);
@@ -366,7 +373,7 @@ function createWebSocketTransport() {
       });
     },
     join(roomId, name) {
-      sendRaw({ type: "join", roomId, name });
+      sendRaw({ type: "join", roomId, name, clientId: state.clientId, color: state.color });
     },
     send(message) {
       sendRaw(message);
@@ -525,7 +532,7 @@ function createFirebaseTransport() {
       auth = fb.getAuth(app);
       const credentials = await fb.signInAnonymously(auth);
       db = fb.getFirestore(app);
-      selfId = `${credentials.user.uid}-${shortId()}`;
+      selfId = `${credentials.user.uid}-${normalizeClientId(state.clientId) || shortId()}`;
     },
     async join(roomId, name) {
       const now = Date.now();
@@ -538,13 +545,28 @@ function createFirebaseTransport() {
       const currentParticipants = await fb.getDocs(participantsRef);
       const peers = [];
 
+      const ownParticipantPrefix = `${auth.currentUser?.uid || ""}-`;
+      const duplicateDeletes = [];
+
       currentParticipants.forEach((docSnap) => {
         if (docSnap.id === selfId) return;
         const data = docSnap.data();
+        const isOwnPreviousSession = ownParticipantPrefix && docSnap.id.startsWith(ownParticipantPrefix);
+        const isSameClient = data.clientId && data.clientId === state.clientId;
+
+        if (isOwnPreviousSession || isSameClient) {
+          duplicateDeletes.push(fb.deleteDoc(docSnap.ref).catch(() => {}));
+          return;
+        }
+
         if (!isStalePeer(data.lastSeenMs)) {
           peers.push(participantToPeer(docSnap.id, data));
         }
       });
+
+      if (duplicateDeletes.length) {
+        await Promise.allSettled(duplicateDeletes);
+      }
 
       await fb.setDoc(roomRef, {
         roomId,
@@ -554,6 +576,8 @@ function createFirebaseTransport() {
 
       await fb.setDoc(participantRef, {
         name,
+        clientId: state.clientId,
+        ownerUid: auth.currentUser?.uid || "",
         color: state.color,
         mediaState: currentMediaState(),
         joinedAt: fb.serverTimestamp(),
@@ -803,6 +827,7 @@ function createPeer(meta, shouldOffer) {
   };
 
   state.peers.set(peer.id, peer);
+  getPeerAudioPrefs(peer.id);
 
   syncSenders(peer);
 
@@ -1101,6 +1126,36 @@ function applyAudioOutputToElement(element) {
   return element.setSinkId(sinkId);
 }
 
+function getPeerAudioPrefs(peerId) {
+  if (!state.peerAudioPrefs.has(peerId)) {
+    state.peerAudioPrefs.set(peerId, {
+      muted: false,
+      volume: 1
+    });
+  }
+
+  return state.peerAudioPrefs.get(peerId);
+}
+
+function applyTileAudioState(peerId, tile, isLocal) {
+  const prefs = peerId === "local"
+    ? { muted: false, volume: 1 }
+    : getPeerAudioPrefs(peerId);
+
+  tile.video.muted = true;
+  tile.audio.volume = prefs.volume;
+  tile.audio.muted = Boolean(isLocal || state.outputMuted || prefs.muted);
+}
+
+function applyPeerAudioPrefs(peerId) {
+  const tile = state.tiles.get(peerId);
+  if (!tile) return;
+  applyTileAudioState(peerId, tile, peerId === "local");
+  if (peerId !== "local") {
+    playTileMedia(tile, false);
+  }
+}
+
 async function toggleCamera() {
   if (state.cameraEnabled) {
     state.cameraEnabled = false;
@@ -1308,15 +1363,10 @@ function updateTile(peerId, override = null) {
       console.warn("Falha ao aplicar saída de áudio:", error);
     });
   }
-  tile.video.muted = true;
-  tile.audio.muted = Boolean(data.isLocal || state.outputMuted);
+  applyTileAudioState(peerId, tile, Boolean(data.isLocal));
   tile.name.textContent = data.name;
   tile.avatarText.textContent = getInitial(data.name);
   tile.avatarText.style.background = data.color;
-  tile.badges.innerHTML = "";
-
-  tile.badges.appendChild(createBadge("Mic", !mediaState.micEnabled));
-  tile.badges.appendChild(createBadge(mediaState.screenEnabled ? "Tela" : "Cam", !mediaState.screenEnabled && mediaState.cameraEnabled === false));
   playTileMedia(tile, Boolean(data.isLocal));
   updateStageLayout();
 }
@@ -1344,13 +1394,11 @@ function createTile(id) {
   footer.className = "tile-footer";
   const name = document.createElement("span");
   name.className = "tile-name";
-  const badges = document.createElement("div");
-  badges.className = "tile-badges";
 
-  footer.append(name, badges);
+  footer.append(name);
   root.append(video, audio, avatar, footer);
 
-  return { root, video, audio, avatarText, name, badges };
+  return { root, video, audio, avatarText, name };
 }
 
 function playTileMedia(tile, isLocal) {
@@ -1385,20 +1433,13 @@ function requestAudioUnlock() {
 function resumeRemoteMedia() {
   for (const [peerId, tile] of state.tiles) {
     if (peerId === "local") continue;
-    tile.audio.muted = state.outputMuted;
+    applyTileAudioState(peerId, tile, false);
     playTileMedia(tile, false);
   }
 
   if (!state.outputMuted) {
     state.audioUnlockToastShown = false;
   }
-}
-
-function createBadge(text, isOff) {
-  const badge = document.createElement("span");
-  badge.textContent = text;
-  badge.classList.toggle("off", Boolean(isOff));
-  return badge;
 }
 
 function updateStageLayout() {
@@ -1413,7 +1454,8 @@ function renderPeople() {
       id: "local",
       name: `${state.userName || "Você"} (você)`,
       color: state.color,
-      mediaState: currentMediaState()
+      mediaState: currentMediaState(),
+      isLocal: true
     },
     ...state.peers.values()
   ];
@@ -1424,8 +1466,23 @@ function renderPeople() {
 }
 
 function createPersonRow(person) {
-  const row = document.createElement("div");
+  const isLocal = person.id === "local" || person.isLocal;
+  const isOpen = state.selectedPeerId === person.id && !isLocal;
+  const prefs = isLocal ? null : getPeerAudioPrefs(person.id);
+
+  const card = document.createElement("div");
+  card.className = "person-card";
+  card.classList.toggle("open", isOpen);
+  card.classList.toggle("remote-muted", Boolean(prefs?.muted));
+
+  const row = document.createElement(isLocal ? "div" : "button");
   row.className = "person-row";
+  row.classList.toggle("is-local", isLocal);
+  if (!isLocal) {
+    row.type = "button";
+    row.dataset.peerRow = person.id;
+    row.setAttribute("aria-expanded", String(isOpen));
+  }
 
   const avatar = document.createElement("span");
   avatar.className = "avatar";
@@ -1449,7 +1506,13 @@ function createPersonRow(person) {
   );
 
   row.append(avatar, text, stateIcons);
-  return row;
+  card.append(row);
+
+  if (isOpen) {
+    card.append(createPersonControls(person));
+  }
+
+  return card;
 }
 
 function createMiniState(label, active) {
@@ -1457,6 +1520,101 @@ function createMiniState(label, active) {
   item.classList.toggle("active", Boolean(active));
   item.textContent = label;
   return item;
+}
+
+function createPersonControls(person) {
+  const prefs = getPeerAudioPrefs(person.id);
+  const volume = Math.round(prefs.volume * 100);
+
+  const controls = document.createElement("div");
+  controls.className = "person-controls";
+
+  const muteButton = document.createElement("button");
+  muteButton.className = "person-mute-button";
+  muteButton.classList.toggle("off", prefs.muted);
+  muteButton.type = "button";
+  muteButton.dataset.peerMute = person.id;
+  muteButton.setAttribute("aria-pressed", String(prefs.muted));
+  muteButton.setAttribute("aria-label", prefs.muted ? `Desmutar ${person.name}` : `Mutar ${person.name}`);
+  muteButton.textContent = prefs.muted ? "Mutado" : "Som";
+
+  const volumeControl = document.createElement("label");
+  volumeControl.className = "person-volume";
+
+  const slider = document.createElement("input");
+  slider.type = "range";
+  slider.min = "0";
+  slider.max = "100";
+  slider.step = "1";
+  slider.value = String(volume);
+  slider.dataset.peerVolume = person.id;
+  slider.setAttribute("aria-label", `Volume de ${person.name}`);
+
+  const value = document.createElement("output");
+  value.textContent = `${volume}%`;
+
+  volumeControl.append(slider, value);
+  controls.append(muteButton, volumeControl);
+  return controls;
+}
+
+function handlePeopleClick(event) {
+  const muteButton = event.target.closest("[data-peer-mute]");
+  if (muteButton) {
+    togglePeerMute(muteButton.dataset.peerMute);
+    return;
+  }
+
+  const row = event.target.closest("[data-peer-row]");
+  if (!row) return;
+
+  const peerId = row.dataset.peerRow;
+  if (!state.peers.has(peerId)) return;
+
+  state.selectedPeerId = state.selectedPeerId === peerId ? null : peerId;
+  renderPeople();
+}
+
+function handlePeopleInput(event) {
+  const slider = event.target.closest("[data-peer-volume]");
+  if (!slider) return;
+
+  const peerId = slider.dataset.peerVolume;
+  const volume = clamp(Number(slider.value) / 100, 0, 1);
+  setPeerVolume(peerId, volume);
+
+  const output = slider.parentElement?.querySelector("output");
+  if (output) {
+    output.textContent = `${Math.round(volume * 100)}%`;
+  }
+}
+
+function handlePeopleChange(event) {
+  if (event.target.closest("[data-peer-volume]")) {
+    renderPeople();
+  }
+}
+
+function togglePeerMute(peerId) {
+  if (!state.peers.has(peerId)) return;
+
+  const prefs = getPeerAudioPrefs(peerId);
+  prefs.muted = !prefs.muted;
+  if (!prefs.muted && prefs.volume === 0) {
+    prefs.volume = 0.7;
+  }
+
+  applyPeerAudioPrefs(peerId);
+  renderPeople();
+}
+
+function setPeerVolume(peerId, volume) {
+  if (!state.peers.has(peerId)) return;
+
+  const prefs = getPeerAudioPrefs(peerId);
+  prefs.volume = volume;
+  prefs.muted = volume <= 0;
+  applyPeerAudioPrefs(peerId);
 }
 
 function sendChatMessage(event) {
@@ -1503,6 +1661,9 @@ function removePeer(peerId, showToast = true) {
     peer.pc.close();
     peer.remoteStream.getTracks().forEach((track) => track.stop());
     state.peers.delete(peerId);
+    if (state.selectedPeerId === peerId) {
+      state.selectedPeerId = null;
+    }
     if (showToast) {
       toast(`${peer.name} saiu da sala.`);
     }
@@ -1552,8 +1713,7 @@ function updateControls() {
 
 function applyOutputMute() {
   for (const [peerId, tile] of state.tiles) {
-    tile.video.muted = true;
-    tile.audio.muted = peerId === "local" || state.outputMuted;
+    applyTileAudioState(peerId, tile, peerId === "local");
   }
 
   if (!state.outputMuted) {
@@ -1725,6 +1885,8 @@ async function leaveRoom() {
   state.micEnabled = false;
   state.outputMuted = false;
   state.screenTrack = null;
+  state.selectedPeerId = null;
+  state.peerAudioPrefs.clear();
 
   els.messages.replaceChildren();
   els.joinButton.disabled = false;
@@ -1799,6 +1961,8 @@ function participantToPeer(id, data) {
   return {
     id,
     name: data.name || "Convidado",
+    clientId: data.clientId || "",
+    ownerUid: data.ownerUid || "",
     color: data.color || palette[Math.abs(hashCode(id)) % palette.length],
     lastSeenMs: data.lastSeenMs || 0,
     mediaState: {
@@ -1906,6 +2070,24 @@ function getInitial(name) {
 
 function shortId() {
   return Math.random().toString(36).slice(2, 10);
+}
+
+function getOrCreateClientId() {
+  const existing = normalizeClientId(localStorage.getItem("fuckdisc0rd.clientId"));
+  if (existing) return existing;
+
+  const generated = `u${shortId()}${shortId()}`;
+  localStorage.setItem("fuckdisc0rd.clientId", generated);
+  return generated;
+}
+
+function normalizeClientId(value) {
+  const normalized = String(value || "").replace(/[^A-Za-z0-9]/g, "").slice(0, 32);
+  return normalized.length >= 8 ? normalized : "";
+}
+
+function colorForId(value) {
+  return palette[Math.abs(hashCode(value || shortId())) % palette.length];
 }
 
 function hashCode(value) {

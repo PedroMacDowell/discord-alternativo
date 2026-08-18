@@ -105,6 +105,11 @@ function attachClient(socket, req) {
     id: createId(),
     name: "Convidado",
     color: colorFromSeed(crypto.randomBytes(2).readUInt16BE(0)),
+    mediaState: {
+      micEnabled: false,
+      cameraEnabled: false,
+      screenEnabled: false
+    },
     roomId: null,
     socket,
     buffer: Buffer.alloc(0),
@@ -191,10 +196,15 @@ function handleMessage(client, raw) {
   if (message.type === "join") {
     const roomId = normalizeRoomId(message.roomId);
     const name = normalizeName(message.name);
+    const stableClientId = normalizeClientId(message.clientId);
 
     if (!roomId) {
       send(client, { type: "error", message: "Sala inválida." });
       return;
+    }
+
+    if (stableClientId && stableClientId !== client.id) {
+      rekeyClient(client, stableClientId);
     }
 
     if (client.roomId) {
@@ -203,6 +213,7 @@ function handleMessage(client, raw) {
 
     client.roomId = roomId;
     client.name = name || "Convidado";
+    client.color = normalizeColor(message.color) || colorFromSeed(Math.abs(hashCode(client.id)));
 
     if (!rooms.has(roomId)) {
       rooms.set(roomId, new Map());
@@ -258,14 +269,16 @@ function handleMessage(client, raw) {
   }
 
   if (message.type === "media-state") {
+    client.mediaState = {
+      micEnabled: Boolean(message.state?.micEnabled),
+      cameraEnabled: Boolean(message.state?.cameraEnabled),
+      screenEnabled: Boolean(message.state?.screenEnabled)
+    };
+
     broadcast(client.roomId, {
       type: "media-state",
       from: client.id,
-      state: {
-        micEnabled: Boolean(message.state?.micEnabled),
-        cameraEnabled: Boolean(message.state?.cameraEnabled),
-        screenEnabled: Boolean(message.state?.screenEnabled)
-      }
+      state: client.mediaState
     }, client.id);
     return;
   }
@@ -280,7 +293,10 @@ function publicClient(client) {
     id: client.id,
     name: client.name,
     color: client.color,
-    joinedAt: client.joinedAt
+    clientId: client.id,
+    mediaState: client.mediaState,
+    joinedAt: client.joinedAt,
+    lastSeenMs: Date.now()
   };
 }
 
@@ -347,6 +363,20 @@ function removeClient(client) {
   clients.delete(client.id);
 }
 
+function rekeyClient(client, id) {
+  const previousId = client.id;
+  const existing = clients.get(id);
+
+  if (existing && existing !== client) {
+    removeClient(existing);
+    closeSocket(existing.socket);
+  }
+
+  clients.delete(previousId);
+  client.id = id;
+  clients.set(client.id, client);
+}
+
 function closeSocket(socket) {
   try {
     socket.end();
@@ -374,6 +404,25 @@ function normalizeName(value) {
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 36);
+}
+
+function normalizeClientId(value) {
+  const normalized = String(value || "").replace(/[^A-Za-z0-9]/g, "").slice(0, 32);
+  return normalized.length >= 8 ? normalized : "";
+}
+
+function normalizeColor(value) {
+  const color = String(value || "").trim();
+  return /^#[0-9a-fA-F]{6}$/.test(color) ? color : "";
+}
+
+function hashCode(value) {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = ((hash << 5) - hash) + value.charCodeAt(index);
+    hash |= 0;
+  }
+  return hash;
 }
 
 function colorFromSeed(seed) {
