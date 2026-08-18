@@ -1193,9 +1193,10 @@ input:focus {
 
 .mic-monitor {
   display: grid;
-  gap: 7px;
+  gap: 5px;
   width: clamp(170px, 18vw, 230px);
-  padding: 9px 11px;
+  min-height: 52px;
+  padding: 8px 11px;
   border: 1px solid var(--line-soft);
   border-radius: var(--radius);
   background:
@@ -1213,8 +1214,30 @@ input:focus {
   white-space: nowrap;
 }
 
+.mic-monitor small {
+  overflow: hidden;
+  color: var(--muted-2);
+  font-size: 0.68rem;
+  font-weight: 850;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .mic-monitor.active span {
   color: var(--accent);
+}
+
+.mic-monitor.send-ok small {
+  color: var(--success);
+}
+
+.mic-monitor.send-warn small {
+  color: var(--accent-2);
+}
+
+.mic-monitor.send-bad small {
+  color: #ffb4ad;
 }
 
 .mic-monitor.muted span,
@@ -1320,6 +1343,16 @@ input:focus {
 .control-button.off {
   background: rgba(255, 102, 92, 0.16);
   color: #ffb4ad;
+}
+
+.control-button.utility {
+  background: rgba(255, 248, 239, 0.08);
+  color: var(--accent-2);
+}
+
+.control-button.utility:disabled {
+  cursor: wait;
+  opacity: 0.58;
 }
 
 .control-button.hangup {
