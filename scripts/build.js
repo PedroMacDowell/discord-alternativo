@@ -14,7 +14,8 @@ const config = {
 const rtcConfig = {
   turnUrls: splitEnv("RTC_TURN_URLS", "TURN_URLS", "VITE_RTC_TURN_URLS"),
   turnUsername: pickEnv("RTC_TURN_USERNAME", "TURN_USERNAME", "VITE_RTC_TURN_USERNAME"),
-  turnCredential: pickEnv("RTC_TURN_CREDENTIAL", "TURN_CREDENTIAL", "VITE_RTC_TURN_CREDENTIAL")
+  turnCredential: pickEnv("RTC_TURN_CREDENTIAL", "TURN_CREDENTIAL", "VITE_RTC_TURN_CREDENTIAL"),
+  forceRelay: readBooleanEnv("RTC_FORCE_RELAY", "RTC_FORCE_TURN")
 };
 
 const requiredKeys = ["apiKey", "authDomain", "projectId", "appId"];
@@ -58,6 +59,11 @@ function splitEnv(...keys) {
   return value
     ? value.split(",").map((item) => item.trim()).filter(Boolean)
     : [];
+}
+
+function readBooleanEnv(...keys) {
+  const value = pickEnv(...keys).toLowerCase();
+  return ["1", "true", "yes", "on"].includes(value);
 }
 
 function removeEmptyValues(value) {
