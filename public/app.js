@@ -67,6 +67,7 @@ const state = {
   transport: null,
   selfId: null,
   clientId: CLIENT_ID,
+  sessionId: shortId(),
   joinMode: "create",
   serverId: "",
   serverName: "",
@@ -383,7 +384,7 @@ function createWebSocketTransport() {
       });
     },
     join(roomId, name) {
-      sendRaw({ type: "join", roomId, name, clientId: state.clientId, color: state.color });
+      sendRaw({ type: "join", roomId, name, clientId: state.clientId, sessionId: state.sessionId, color: state.color });
     },
     send(message) {
       sendRaw(message);
@@ -471,12 +472,20 @@ function createFirebaseTransport() {
         const peerMeta = participantToPeer(id, data);
         const peer = state.peers.get(id);
 
+        if (peer && peerMeta.sessionId && peer.sessionId && peer.sessionId !== peerMeta.sessionId) {
+          removePeer(id, false);
+          createPeer(peerMeta, false);
+          renderPeople();
+          continue;
+        }
+
         if (!peer) {
           dispatchServerMessage({ type: "peer-joined", peer: peerMeta });
           continue;
         }
 
         peer.name = peerMeta.name;
+        peer.sessionId = peerMeta.sessionId || peer.sessionId;
         peer.color = peerMeta.color;
         peer.lastSeenMs = peerMeta.lastSeenMs;
         peer.mediaState = { ...peer.mediaState, ...peerMeta.mediaState };
@@ -497,6 +506,7 @@ function createFirebaseTransport() {
         dispatchServerMessage({
           type: "signal",
           from: data.from,
+          fromSessionId: data.fromSessionId || "",
           signalType: data.signalType,
           data: data.data
         });
@@ -587,6 +597,7 @@ function createFirebaseTransport() {
       await fb.setDoc(participantRef, {
         name,
         clientId: state.clientId,
+        sessionId: state.sessionId,
         ownerUid: auth.currentUser?.uid || "",
         color: state.color,
         mediaState: currentMediaState(),
@@ -614,6 +625,7 @@ function createFirebaseTransport() {
       if (message.type === "signal") {
         fb.addDoc(signalsRef, {
           from: selfId,
+          fromSessionId: state.sessionId,
           to: message.to,
           signalType: message.signalType,
           data: plainSignalData(message.data),
@@ -873,6 +885,7 @@ function createPeer(meta, shouldOffer) {
   const peer = {
     id: meta.id,
     name: meta.name || "Convidado",
+    sessionId: meta.sessionId || "",
     color: meta.color || palette[state.peers.size % palette.length],
     lastSeenMs: meta.lastSeenMs || Date.now(),
     pc,
@@ -951,12 +964,20 @@ async function makeOffer(peer) {
 async function receiveSignal(message) {
   let peer = state.peers.get(message.from);
 
+  if (peer && message.fromSessionId && peer.sessionId && peer.sessionId !== message.fromSessionId) {
+    removePeer(message.from, false);
+    peer = null;
+  }
+
   if (!peer) {
     peer = createPeer({
       id: message.from,
+      sessionId: message.fromSessionId || "",
       name: "Convidado",
       color: palette[state.peers.size % palette.length]
     }, false);
+  } else if (message.fromSessionId && !peer.sessionId) {
+    peer.sessionId = message.fromSessionId;
   }
 
   try {
@@ -2267,6 +2288,7 @@ function participantToPeer(id, data) {
     id,
     name: data.name || "Convidado",
     clientId: data.clientId || "",
+    sessionId: data.sessionId || "",
     ownerUid: data.ownerUid || "",
     color: data.color || palette[Math.abs(hashCode(id)) % palette.length],
     lastSeenMs: data.lastSeenMs || 0,
