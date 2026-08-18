@@ -66,6 +66,10 @@ button {
   border: 0;
 }
 
+select {
+  font: inherit;
+}
+
 svg {
   display: block;
   width: 20px;
@@ -941,6 +945,14 @@ input:focus {
   background: #090806;
 }
 
+.video-tile audio {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
 .video-tile.screen video {
   object-fit: contain;
 }
@@ -1178,6 +1190,48 @@ input:focus {
   transition: transform 0.08s linear;
 }
 
+.device-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 52px;
+  width: clamp(172px, 18vw, 236px);
+  padding: 0 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  background:
+    linear-gradient(180deg, rgba(255, 248, 239, 0.025), transparent),
+    #100e0d;
+  color: var(--muted);
+}
+
+.device-select svg {
+  flex: 0 0 auto;
+  width: 19px;
+  height: 19px;
+  color: var(--accent-2);
+}
+
+.device-select select {
+  min-width: 0;
+  width: 100%;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text-soft);
+  font-size: 0.78rem;
+  font-weight: 850;
+}
+
+.device-select select:disabled {
+  color: var(--muted-2);
+}
+
+.device-select:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(85, 214, 194, 0.13);
+}
+
 .control-button {
   width: 52px;
   height: 52px;
@@ -1357,6 +1411,10 @@ input:focus {
 
   .mic-monitor {
     order: -1;
+    width: min(100%, 290px);
+  }
+
+  .device-select {
     width: min(100%, 290px);
   }
 

@@ -41,6 +41,7 @@ const els = {
   micStatusLabel: document.querySelector("#micStatusLabel"),
   noiseButton: document.querySelector("#noiseButton"),
   deafenButton: document.querySelector("#deafenButton"),
+  audioOutputSelect: document.querySelector("#audioOutputSelect"),
   cameraButton: document.querySelector("#cameraButton"),
   screenButton: document.querySelector("#screenButton"),
   leaveButton: document.querySelector("#leaveButton"),
@@ -77,11 +78,13 @@ const state = {
   micEnabled: false,
   noiseSuppressionEnabled: true,
   outputMuted: false,
+  audioOutputId: localStorage.getItem("fuckdisc0rd.audioOutputId") || "",
   audioContext: null,
   micSource: null,
   micAnalyser: null,
   micMeterFrame: null,
   micLevel: 0,
+  audioUnlockToastShown: false,
   chatCollapsed: false,
   chatUnread: false,
   peopleCollapsed: false,
@@ -109,6 +112,7 @@ function bootstrap() {
   setJoinMode(serverFromUrl ? "enter" : "create");
   renderSavedServers();
   applyPanelState();
+  refreshAudioOutputs();
 
   els.joinForm.addEventListener("submit", joinRoom);
   els.createModeButton.addEventListener("click", () => setJoinMode("create"));
@@ -146,9 +150,18 @@ function bootstrap() {
   els.micButton.addEventListener("click", toggleMicrophone);
   els.noiseButton.addEventListener("click", toggleNoiseSuppression);
   els.deafenButton.addEventListener("click", toggleOutputAudio);
+  els.audioOutputSelect.addEventListener("change", changeAudioOutput);
   els.cameraButton.addEventListener("click", toggleCamera);
   els.screenButton.addEventListener("click", toggleScreenShare);
   els.chatForm.addEventListener("submit", sendChatMessage);
+  window.addEventListener("pointerdown", resumeRemoteMedia, { capture: true });
+  window.addEventListener("keydown", resumeRemoteMedia, { capture: true });
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) {
+      resumeRemoteMedia();
+    }
+  });
+  navigator.mediaDevices?.addEventListener?.("devicechange", refreshAudioOutputs);
 
   window.addEventListener("beforeunload", () => {
     state.transport?.leave?.(true);
@@ -717,12 +730,14 @@ async function prepareLocalMedia() {
       state.audioTrack.enabled = true;
       startMicMonitor();
     }
+    await refreshAudioOutputs();
   } catch (error) {
     console.warn("Falha ao acessar mídia local:", error);
     state.micEnabled = false;
     state.cameraEnabled = false;
     updateMicMonitorDisplay();
     toast("Você entrou sem microfone. Dá para ativar pelo botão de microfone.");
+    await refreshAudioOutputs();
   }
 }
 
@@ -817,6 +832,10 @@ function createPeer(meta, shouldOffer) {
     updateTile(peer.id);
     if (pc.connectionState === "failed") {
       pc.restartIce();
+      toast("A conexão de mídia falhou. Tentando reconectar...");
+    }
+    if (pc.connectionState === "connected") {
+      resumeRemoteMedia();
     }
   });
 
@@ -930,6 +949,7 @@ async function toggleMicrophone() {
       if (state.audioTrack) {
         state.audioTrack.enabled = true;
         startMicMonitor();
+        await refreshAudioOutputs();
       }
     } catch {
       toast("Não consegui ativar o microfone.");
@@ -999,6 +1019,88 @@ function toggleOutputAudio() {
   toast(state.outputMuted ? "Fone mutado." : "Fone desmutado.");
 }
 
+async function changeAudioOutput() {
+  state.audioOutputId = els.audioOutputSelect.value;
+  localStorage.setItem("fuckdisc0rd.audioOutputId", state.audioOutputId);
+
+  const results = await applyAudioOutputForAll();
+  const failed = results.some((result) => result.status === "rejected");
+
+  if (failed) {
+    toast("Não consegui trocar a saída de áudio neste navegador.");
+    return;
+  }
+
+  resumeRemoteMedia();
+  toast("Saída de áudio atualizada.");
+}
+
+async function refreshAudioOutputs() {
+  if (!els.audioOutputSelect) return;
+
+  const supported = supportsAudioOutputSelection();
+  els.audioOutputSelect.disabled = !supported;
+
+  if (!supported) {
+    els.audioOutputSelect.replaceChildren(createOutputOption("", "Saída do sistema"));
+    state.audioOutputId = "";
+    return;
+  }
+
+  const devices = navigator.mediaDevices?.enumerateDevices
+    ? await navigator.mediaDevices.enumerateDevices().catch(() => [])
+    : [];
+  const outputs = devices.filter((device) => device.kind === "audiooutput");
+  const options = [createOutputOption("", "Saída padrão")];
+  const seen = new Set([""]);
+
+  for (const device of outputs) {
+    if (!device.deviceId || seen.has(device.deviceId)) continue;
+    seen.add(device.deviceId);
+    const label = device.deviceId === "default"
+      ? "Padrão do sistema"
+      : (device.label || `Saída ${options.length}`);
+    options.push(createOutputOption(device.deviceId, label));
+  }
+
+  if (!seen.has(state.audioOutputId)) {
+    state.audioOutputId = "";
+    localStorage.setItem("fuckdisc0rd.audioOutputId", "");
+  }
+
+  els.audioOutputSelect.replaceChildren(...options);
+  els.audioOutputSelect.value = state.audioOutputId;
+  await applyAudioOutputForAll();
+}
+
+function createOutputOption(value, label) {
+  const option = document.createElement("option");
+  option.value = value;
+  option.textContent = label;
+  return option;
+}
+
+function supportsAudioOutputSelection() {
+  return typeof HTMLMediaElement !== "undefined"
+    && typeof HTMLMediaElement.prototype.setSinkId === "function";
+}
+
+function applyAudioOutputForAll() {
+  const jobs = [];
+  for (const [peerId, tile] of state.tiles) {
+    if (peerId === "local") continue;
+    jobs.push(applyAudioOutputToElement(tile.audio));
+  }
+  return Promise.allSettled(jobs);
+}
+
+function applyAudioOutputToElement(element) {
+  if (!element?.setSinkId) return Promise.resolve();
+  const sinkId = state.audioOutputId || "";
+  if (element.sinkId === sinkId) return Promise.resolve();
+  return element.setSinkId(sinkId);
+}
+
 async function toggleCamera() {
   if (state.cameraEnabled) {
     state.cameraEnabled = false;
@@ -1008,22 +1110,17 @@ async function toggleCamera() {
     state.cameraTrack = null;
   } else {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-          frameRate: { ideal: 30, max: 60 }
-        }
-      });
+      const stream = await getCameraStream();
       state.cameraTrack = stream.getVideoTracks()[0] || null;
       state.cameraEnabled = Boolean(state.cameraTrack);
       if (state.cameraTrack) {
         state.cameraTrack.enabled = true;
       }
-    } catch {
+    } catch (error) {
+      console.warn("Falha ao acessar câmera:", error);
       state.cameraEnabled = false;
       state.cameraTrack = null;
-      toast("Não consegui ativar a câmera.");
+      toast(cameraErrorMessage(error));
       return;
     }
   }
@@ -1036,6 +1133,77 @@ async function toggleCamera() {
   renderLocalTile();
   renderPeople();
   sendMediaState();
+}
+
+async function getCameraStream() {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    throw new Error("media-devices-unavailable");
+  }
+
+  const attempts = [
+    {
+      video: {
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+        frameRate: { ideal: 30 }
+      }
+    },
+    { video: true }
+  ];
+
+  const devices = navigator.mediaDevices.enumerateDevices
+    ? await navigator.mediaDevices.enumerateDevices().catch(() => [])
+    : [];
+  const cameras = devices.filter((device) => device.kind === "videoinput" && device.deviceId);
+
+  for (const camera of cameras) {
+    attempts.push({
+      video: {
+        deviceId: { exact: camera.deviceId },
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+        frameRate: { ideal: 30 }
+      }
+    });
+  }
+
+  let lastError = null;
+  const tried = new Set();
+
+  for (const constraints of attempts) {
+    const key = JSON.stringify(constraints);
+    if (tried.has(key)) continue;
+    tried.add(key);
+
+    try {
+      return await navigator.mediaDevices.getUserMedia(constraints);
+    } catch (error) {
+      lastError = error;
+      if (error?.name === "NotAllowedError" || error?.name === "SecurityError") {
+        throw error;
+      }
+    }
+  }
+
+  throw lastError || new Error("camera-unavailable");
+}
+
+function cameraErrorMessage(error) {
+  const name = error?.name || error?.message || "";
+
+  if (name === "NotAllowedError" || name === "SecurityError") {
+    return "Permissão da câmera bloqueada. Libere a câmera no cadeado do navegador.";
+  }
+
+  if (name === "NotFoundError" || name === "DevicesNotFoundError") {
+    return "Não encontrei uma câmera disponível neste dispositivo.";
+  }
+
+  if (name === "NotReadableError" || name === "TrackStartError") {
+    return "A câmera está ocupada ou travada. Feche outro app usando a webcam e tente de novo.";
+  }
+
+  return "Não consegui ativar a câmera. Tente trocar a webcam padrão nas permissões do navegador.";
 }
 
 async function toggleScreenShare() {
@@ -1131,8 +1299,17 @@ function updateTile(peerId, override = null) {
   tile.root.classList.toggle("has-video", shouldShowVideo);
   tile.root.classList.toggle("audio-only", !shouldShowVideo);
   tile.root.classList.toggle("screen", Boolean(mediaState.screenEnabled));
-  tile.video.srcObject = stream;
-  tile.video.muted = Boolean(data.isLocal || state.outputMuted);
+  if (tile.video.srcObject !== stream) {
+    tile.video.srcObject = stream;
+  }
+  if (tile.audio.srcObject !== stream) {
+    tile.audio.srcObject = stream;
+    applyAudioOutputToElement(tile.audio).catch((error) => {
+      console.warn("Falha ao aplicar saída de áudio:", error);
+    });
+  }
+  tile.video.muted = true;
+  tile.audio.muted = Boolean(data.isLocal || state.outputMuted);
   tile.name.textContent = data.name;
   tile.avatarText.textContent = getInitial(data.name);
   tile.avatarText.style.background = data.color;
@@ -1140,6 +1317,7 @@ function updateTile(peerId, override = null) {
 
   tile.badges.appendChild(createBadge("Mic", !mediaState.micEnabled));
   tile.badges.appendChild(createBadge(mediaState.screenEnabled ? "Tela" : "Cam", !mediaState.screenEnabled && mediaState.cameraEnabled === false));
+  playTileMedia(tile, Boolean(data.isLocal));
   updateStageLayout();
 }
 
@@ -1151,6 +1329,11 @@ function createTile(id) {
   const video = document.createElement("video");
   video.autoplay = true;
   video.playsInline = true;
+  video.muted = true;
+
+  const audio = document.createElement("audio");
+  audio.autoplay = true;
+  audio.preload = "auto";
 
   const avatar = document.createElement("div");
   avatar.className = "tile-avatar";
@@ -1165,9 +1348,50 @@ function createTile(id) {
   badges.className = "tile-badges";
 
   footer.append(name, badges);
-  root.append(video, avatar, footer);
+  root.append(video, audio, avatar, footer);
 
-  return { root, video, avatarText, name, badges };
+  return { root, video, audio, avatarText, name, badges };
+}
+
+function playTileMedia(tile, isLocal) {
+  playMediaElement(tile.video, isLocal, false);
+  playMediaElement(tile.audio, isLocal, true);
+}
+
+function playMediaElement(element, isLocal, requiresAudioTrack) {
+  const stream = element.srcObject;
+  if (!(stream instanceof MediaStream)) return;
+
+  const tracks = requiresAudioTrack ? stream.getAudioTracks() : stream.getVideoTracks();
+  const hasPlayableTrack = tracks.some((track) => track.readyState === "live");
+  if (!hasPlayableTrack) return;
+
+  const result = element.play?.();
+  if (!result?.catch) return;
+
+  result.catch((error) => {
+    if (!isLocal && requiresAudioTrack && !element.muted && error?.name === "NotAllowedError") {
+      requestAudioUnlock();
+    }
+  });
+}
+
+function requestAudioUnlock() {
+  if (state.audioUnlockToastShown) return;
+  state.audioUnlockToastShown = true;
+  toast("Clique em qualquer lugar da tela para liberar o áudio da chamada.");
+}
+
+function resumeRemoteMedia() {
+  for (const [peerId, tile] of state.tiles) {
+    if (peerId === "local") continue;
+    tile.audio.muted = state.outputMuted;
+    playTileMedia(tile, false);
+  }
+
+  if (!state.outputMuted) {
+    state.audioUnlockToastShown = false;
+  }
 }
 
 function createBadge(text, isOff) {
@@ -1328,7 +1552,12 @@ function updateControls() {
 
 function applyOutputMute() {
   for (const [peerId, tile] of state.tiles) {
-    tile.video.muted = peerId === "local" || state.outputMuted;
+    tile.video.muted = true;
+    tile.audio.muted = peerId === "local" || state.outputMuted;
+  }
+
+  if (!state.outputMuted) {
+    resumeRemoteMedia();
   }
 }
 
