@@ -1277,8 +1277,19 @@ input:focus {
   outline: 0;
   background: transparent;
   color: var(--text-soft);
+  color-scheme: dark;
   font-size: 0.78rem;
   font-weight: 850;
+}
+
+.device-select select option {
+  background: #14110f;
+  color: var(--text-soft);
+}
+
+.device-select select option:checked {
+  background: #342b22;
+  color: var(--accent-2);
 }
 
 .device-select select:disabled {
