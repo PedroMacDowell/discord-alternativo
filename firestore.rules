@@ -3,11 +3,49 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     match /rooms/{roomId} {
-      allow read, write: if request.auth != null;
+      allow read: if signedIn();
+      allow create, update: if signedIn()
+        && request.resource.data.roomId == roomId;
+      allow delete: if false;
 
-      match /{document=**} {
-        allow read, write: if request.auth != null;
+      match /participants/{participantId} {
+        allow read: if signedIn();
+        allow create, update: if ownsSession(participantId)
+          && request.resource.data.name is string
+          && request.resource.data.name.size() <= 36;
+        allow delete: if ownsSession(participantId);
+      }
+
+      match /signals/{signalId} {
+        allow read: if signedIn();
+        allow create: if signedIn()
+          && ownsSession(request.resource.data.from)
+          && request.resource.data.to is string
+          && request.resource.data.signalType in ["offer", "answer", "candidate"];
+        allow update: if false;
+        allow delete: if signedIn()
+          && (ownsSession(resource.data.from) || ownsSession(resource.data.to));
+      }
+
+      match /messages/{messageId} {
+        allow read: if signedIn();
+        allow create: if signedIn()
+          && ownsSession(request.resource.data.from)
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() <= 800;
+        allow update, delete: if false;
       }
     }
+  }
+
+  function signedIn() {
+    return request.auth != null;
+  }
+
+  function ownsSession(sessionId) {
+    return signedIn()
+      && sessionId is string
+      && sessionId.matches("^" + request.auth.uid + "-[A-Za-z0-9]+$");
   }
 }

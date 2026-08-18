@@ -47,22 +47,7 @@ FIREBASE_MEASUREMENT_ID
 
 As quatro obrigatórias são `FIREBASE_API_KEY`, `FIREBASE_AUTH_DOMAIN`, `FIREBASE_PROJECT_ID` e `FIREBASE_APP_ID`.
 
-Regras simples para começar no Firestore:
-
-```text
-rules_version = '2';
-service cloud.firestore {
-  match /databases/{database}/documents {
-    match /rooms/{roomId} {
-      allow read, write: if request.auth != null;
-
-      match /{document=**} {
-        allow read, write: if request.auth != null;
-      }
-    }
-  }
-}
-```
+As regras do Firestore ficam em `firestore.rules`. Elas exigem login anônimo e limitam escrita de participantes, mensagens e sinais de chamada ao usuário autenticado da sessão.
 
 Depois faça o deploy pela Vercel. O build command já está configurado como:
 
