@@ -48,6 +48,38 @@
             </div>
           </div>
 
+          <section class="join-audio-setup" aria-labelledby="audioSetupTitle">
+            <div class="audio-setup-heading">
+              <h2 id="audioSetupTitle">Audio antes de entrar</h2>
+              <span id="setupAudioStatus">Use os padroes do sistema ou teste aqui.</span>
+            </div>
+            <div class="audio-setup-grid">
+              <label class="setup-device" for="setupMicInputSelect">
+                <span>Entrada</span>
+                <select id="setupMicInputSelect" aria-label="Microfone">
+                  <option value="">Microfone padrao</option>
+                </select>
+              </label>
+              <label class="setup-device" for="setupAudioOutputSelect">
+                <span>Saida</span>
+                <select id="setupAudioOutputSelect" aria-label="Saida de audio">
+                  <option value="">Saida padrao</option>
+                </select>
+              </label>
+            </div>
+            <div class="audio-setup-actions">
+              <button id="setupMicTestButton" class="text-button setup-action" type="button">
+                <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></svg>
+                Testar mic
+              </button>
+              <button id="setupSoundTestButton" class="text-button setup-action" type="button">
+                <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M11 5 6 9H2v6h4l5 4V5Z"/><path d="m17 9 4 4-4 4"/><path d="M14 13h7"/></svg>
+                Testar saida
+              </button>
+            </div>
+            <div class="setup-meter" aria-hidden="true"><span id="setupMicMeterBar"></span></div>
+          </section>
+
           <button id="joinButton" class="primary-button" type="submit">
             <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 11a8 8 0 0 1 16 0"/><path d="M8 11v8"/><path d="M16 11v8"/><path d="M4 19h16"/></svg>
             <span id="joinButtonText">Criar e entrar</span>
