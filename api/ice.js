@@ -21,6 +21,16 @@ module.exports = async function handler(req, res) {
       return;
     }
 
+    const meteredIceServers = await getMeteredIceServers();
+    if (meteredIceServers?.length) {
+      sendJson(res, {
+        iceServers: meteredIceServers,
+        forceRelay: readBooleanEnv("RTC_FORCE_RELAY", "RTC_FORCE_TURN"),
+        source: "metered"
+      });
+      return;
+    }
+
     const staticIceServers = getStaticTurnIceServers();
     sendJson(res, {
       iceServers: staticIceServers,
@@ -61,6 +71,24 @@ async function getTwilioIceServers() {
 
   const data = await response.json();
   return normalizeIceServers(data.ice_servers || data.iceServers || []);
+}
+
+async function getMeteredIceServers() {
+  const appName = pickEnv("METERED_APP_NAME", "OPENRELAY_APP_NAME");
+  const apiKey = pickEnv("METERED_API_KEY", "OPENRELAY_API_KEY");
+
+  if (!appName || !apiKey || typeof fetch !== "function") {
+    return [];
+  }
+
+  const url = `https://${encodeURIComponent(appName)}.metered.live/api/v1/turn/credentials?apiKey=${encodeURIComponent(apiKey)}`;
+  const response = await fetch(url, { method: "GET" });
+
+  if (!response.ok) {
+    throw new Error(`Metered TURN credentials failed: ${response.status}`);
+  }
+
+  return normalizeIceServers(await response.json());
 }
 
 function getStaticTurnIceServers() {
