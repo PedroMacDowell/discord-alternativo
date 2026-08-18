@@ -1070,6 +1070,11 @@ input:focus {
   background: #090806;
 }
 
+.video-tile.audio-only video,
+.video-tile.screen-hidden video {
+  display: none;
+}
+
 .video-tile audio {
   position: absolute;
   width: 1px;
@@ -1399,6 +1404,11 @@ input:focus {
 .control-button.utility {
   background: rgba(255, 248, 239, 0.08);
   color: var(--accent-2);
+}
+
+.control-button.utility.off {
+  background: rgba(255, 248, 239, 0.055);
+  color: var(--muted);
 }
 
 .control-button.utility:disabled {

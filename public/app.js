@@ -45,8 +45,10 @@ const els = {
   deafenButton: document.querySelector("#deafenButton"),
   audioOutputSelect: document.querySelector("#audioOutputSelect"),
   testSoundButton: document.querySelector("#testSoundButton"),
+  reconnectButton: document.querySelector("#reconnectButton"),
   cameraButton: document.querySelector("#cameraButton"),
   screenButton: document.querySelector("#screenButton"),
+  remoteScreensButton: document.querySelector("#remoteScreensButton"),
   leaveButton: document.querySelector("#leaveButton"),
   toastStack: document.querySelector("#toastStack")
 };
@@ -93,7 +95,11 @@ const state = {
   micLevel: 0,
   outboundAudioStatsTimer: null,
   outboundAudioStats: new Map(),
+  audioConnectingTicks: 0,
+  lastAutoReconnectAt: 0,
+  mediaReconnectInFlight: false,
   audioUnlockToastShown: false,
+  remoteScreensVisible: true,
   chatCollapsed: false,
   chatUnread: false,
   peopleCollapsed: false,
@@ -120,6 +126,7 @@ function bootstrap() {
   els.serverCodeInput.value = serverFromUrl;
   state.chatCollapsed = localStorage.getItem("fuckdisc0rd.chatCollapsed") === "true";
   state.peopleCollapsed = localStorage.getItem("fuckdisc0rd.peopleCollapsed") === "true";
+  state.remoteScreensVisible = localStorage.getItem("fuckdisc0rd.remoteScreensVisible") !== "false";
   localStorage.removeItem("fuckdisc0rd.audioInputId");
   localStorage.removeItem("fuckdisc0rd.audioOutputId");
   setJoinMode(serverFromUrl ? "enter" : "create");
@@ -169,8 +176,10 @@ function bootstrap() {
   els.deafenButton.addEventListener("click", toggleOutputAudio);
   els.audioOutputSelect.addEventListener("change", changeAudioOutput);
   els.testSoundButton.addEventListener("click", playOutputTest);
+  els.reconnectButton.addEventListener("click", () => reconnectMediaConnections(true));
   els.cameraButton.addEventListener("click", toggleCamera);
   els.screenButton.addEventListener("click", toggleScreenShare);
+  els.remoteScreensButton.addEventListener("click", toggleRemoteScreens);
   els.chatForm.addEventListener("submit", sendChatMessage);
   window.addEventListener("pointerdown", resumeRemoteMedia, { capture: true });
   window.addEventListener("keydown", resumeRemoteMedia, { capture: true });
@@ -736,6 +745,7 @@ function dispatchServerMessage(message) {
     if (peer) {
       peer.mediaState = { ...peer.mediaState, ...message.state };
       updateTile(peer.id);
+      updateControls();
       renderPeople();
     }
   }
@@ -893,6 +903,9 @@ function createPeer(meta, shouldOffer) {
     audioSender: audioTransceiver.sender,
     videoSender: videoTransceiver.sender,
     pendingCandidates: [],
+    makingOffer: false,
+    reconnectTimer: null,
+    lastReconnectAt: 0,
     mediaState: {
       micEnabled: meta.mediaState?.micEnabled ?? true,
       cameraEnabled: meta.mediaState?.cameraEnabled ?? false,
@@ -931,15 +944,30 @@ function createPeer(meta, shouldOffer) {
     updateTile(peer.id);
     if (pc.connectionState === "failed") {
       pc.restartIce();
-      toast("A conexão de mídia falhou. Tentando reconectar...");
+      schedulePeerReconnect(peer, "failed", 700);
+      toast("A conexao de midia falhou. Tentando reconectar...");
+    }
+    if (pc.connectionState === "disconnected") {
+      schedulePeerReconnect(peer, "disconnected", 3500);
     }
     if (pc.connectionState === "connected") {
+      cancelPeerReconnect(peer);
       resumeRemoteMedia();
+    }
+  });
+
+  pc.addEventListener("iceconnectionstatechange", () => {
+    if (pc.iceConnectionState === "failed") {
+      schedulePeerReconnect(peer, "ice-failed", 700);
+    }
+    if (pc.iceConnectionState === "disconnected") {
+      schedulePeerReconnect(peer, "ice-disconnected", 3500);
     }
   });
 
   renderPeople();
   updateTile(peer.id);
+  updateControls();
   updateOutboundAudioStatus();
 
   if (shouldOffer) {
@@ -949,15 +977,21 @@ function createPeer(meta, shouldOffer) {
   return peer;
 }
 
-async function makeOffer(peer) {
+async function makeOffer(peer, options = {}) {
+  if (!peer || peer.makingOffer || peer.pc.connectionState === "closed") return;
+
   try {
     if (peer.pc.signalingState !== "stable") return;
+    peer.makingOffer = true;
     await syncSenders(peer);
-    const offer = await peer.pc.createOffer();
+    const offer = await peer.pc.createOffer(options);
+    if (peer.pc.signalingState !== "stable") return;
     await peer.pc.setLocalDescription(offer);
     sendSignal(peer.id, "offer", peer.pc.localDescription);
   } catch (error) {
     console.error("Falha ao criar oferta:", error);
+  } finally {
+    peer.makingOffer = false;
   }
 }
 
@@ -982,7 +1016,14 @@ async function receiveSignal(message) {
 
   try {
     if (message.signalType === "offer") {
-      await peer.pc.setRemoteDescription(new RTCSessionDescription(message.data));
+      const description = new RTCSessionDescription(message.data);
+      const offerCollision = peer.makingOffer || peer.pc.signalingState !== "stable";
+
+      if (offerCollision) {
+        await peer.pc.setLocalDescription({ type: "rollback" }).catch(() => {});
+      }
+
+      await peer.pc.setRemoteDescription(description);
       await flushCandidates(peer);
       await syncSenders(peer);
       const answer = await peer.pc.createAnswer();
@@ -992,7 +1033,7 @@ async function receiveSignal(message) {
     }
 
     if (message.signalType === "answer") {
-      if (peer.pc.signalingState !== "stable") {
+      if (peer.pc.signalingState === "have-local-offer") {
         await peer.pc.setRemoteDescription(new RTCSessionDescription(message.data));
         await flushCandidates(peer);
       }
@@ -1015,6 +1056,65 @@ async function flushCandidates(peer) {
   while (peer.pendingCandidates.length) {
     const candidate = peer.pendingCandidates.shift();
     await peer.pc.addIceCandidate(new RTCIceCandidate(candidate));
+  }
+}
+
+function schedulePeerReconnect(peer, reason = "media", delay = 900) {
+  if (!peer || peer.reconnectTimer || !state.peers.has(peer.id)) return;
+
+  peer.reconnectTimer = window.setTimeout(() => {
+    peer.reconnectTimer = null;
+    if (!state.peers.has(peer.id)) return;
+    restartPeerIce(peer, reason);
+  }, delay);
+}
+
+function cancelPeerReconnect(peer) {
+  if (!peer?.reconnectTimer) return;
+  window.clearTimeout(peer.reconnectTimer);
+  peer.reconnectTimer = null;
+}
+
+async function restartPeerIce(peer, reason = "manual") {
+  if (!peer || peer.pc.connectionState === "closed") return;
+
+  const now = Date.now();
+  if (reason !== "manual" && now - (peer.lastReconnectAt || 0) < 5000) return;
+  peer.lastReconnectAt = now;
+
+  try {
+    peer.pc.restartIce?.();
+    await makeOffer(peer, { iceRestart: true });
+  } catch (error) {
+    console.warn(`Falha ao reconectar ${peer.id} (${reason}):`, error);
+  }
+}
+
+async function reconnectMediaConnections(showToast = true) {
+  if (state.mediaReconnectInFlight) return;
+
+  if (!state.peers.size) {
+    if (showToast) toast("Sem participantes para reconectar.");
+    return;
+  }
+
+  state.mediaReconnectInFlight = true;
+  updateControls();
+
+  try {
+    await replaceAudioForAll();
+    await replaceVideoForAll();
+    await Promise.allSettled([...state.peers.values()].map((peer) => restartPeerIce(peer, "manual")));
+    resumeRemoteMedia();
+    state.audioConnectingTicks = 0;
+    updateOutboundAudioStatus();
+
+    if (showToast) {
+      toast("Reconectando audio da chamada...");
+    }
+  } finally {
+    state.mediaReconnectInFlight = false;
+    updateControls();
   }
 }
 
@@ -1520,6 +1620,14 @@ async function stopScreenShare() {
   sendMediaState();
 }
 
+function toggleRemoteScreens() {
+  state.remoteScreensVisible = !state.remoteScreensVisible;
+  localStorage.setItem("fuckdisc0rd.remoteScreensVisible", String(state.remoteScreensVisible));
+  refreshTiles();
+  updateControls();
+  toast(state.remoteScreensVisible ? "Telas dos outros visiveis." : "Telas dos outros ocultas.");
+}
+
 function getActiveVideoTrack() {
   if (state.screenTrack) return state.screenTrack;
   if (state.cameraEnabled && state.cameraTrack?.readyState === "live") return state.cameraTrack;
@@ -1544,6 +1652,16 @@ function renderLocalTile() {
   });
 }
 
+function refreshTiles() {
+  if (state.tiles.has("local")) {
+    renderLocalTile();
+  }
+
+  for (const peer of state.peers.values()) {
+    updateTile(peer.id);
+  }
+}
+
 function updateTile(peerId, override = null) {
   const data = override || state.peers.get(peerId);
   if (!data) return;
@@ -1560,11 +1678,14 @@ function updateTile(peerId, override = null) {
   const stream = data.stream || data.remoteStream || new MediaStream();
   const videoTracks = stream.getVideoTracks();
   const hasLiveVideo = videoTracks.some((track) => track.readyState === "live" && !track.muted);
-  const shouldShowVideo = Boolean(hasLiveVideo && (mediaState.screenEnabled || mediaState.cameraEnabled !== false));
+  const isLocal = Boolean(data.isLocal);
+  const remoteScreenHidden = Boolean(!isLocal && mediaState.screenEnabled && !state.remoteScreensVisible);
+  const shouldShowVideo = Boolean(hasLiveVideo && !remoteScreenHidden && (mediaState.screenEnabled || mediaState.cameraEnabled !== false));
 
   tile.root.classList.toggle("has-video", shouldShowVideo);
   tile.root.classList.toggle("audio-only", !shouldShowVideo);
   tile.root.classList.toggle("screen", Boolean(mediaState.screenEnabled));
+  tile.root.classList.toggle("screen-hidden", remoteScreenHidden);
   tile.root.classList.toggle("screen-focus", Boolean(mediaState.screenEnabled && shouldShowVideo));
   if (tile.video.srcObject !== stream) {
     tile.video.srcObject = stream;
@@ -1872,6 +1993,7 @@ function addChatMessage(message) {
 function removePeer(peerId, showToast = true) {
   const peer = state.peers.get(peerId);
   if (peer) {
+    cancelPeerReconnect(peer);
     peer.pc.close();
     peer.remoteStream.getTracks().forEach((track) => track.stop());
     state.peers.delete(peerId);
@@ -1891,10 +2013,12 @@ function removePeer(peerId, showToast = true) {
   }
 
   updateOutboundAudioStatus();
+  updateControls();
 }
 
 function updateControls() {
   const noiseSupported = supportsNoiseSuppression();
+  const hasRemoteScreen = [...state.peers.values()].some((peer) => peer.mediaState?.screenEnabled);
 
   els.micButton.classList.toggle("active", state.micEnabled);
   els.micButton.classList.toggle("off", !state.micEnabled);
@@ -1924,6 +2048,20 @@ function updateControls() {
   els.screenButton.classList.toggle("active", Boolean(state.screenTrack));
   els.screenButton.dataset.tooltip = state.screenTrack ? "Parar compartilhamento" : "Compartilhar tela";
   els.screenButton.setAttribute("aria-pressed", String(Boolean(state.screenTrack)));
+
+  els.reconnectButton.disabled = state.mediaReconnectInFlight || !state.joined || !state.peers.size;
+  els.reconnectButton.dataset.tooltip = state.mediaReconnectInFlight
+    ? "Reconectando audio..."
+    : "Reconectar audio";
+
+  els.remoteScreensButton.hidden = !hasRemoteScreen;
+  els.remoteScreensButton.classList.toggle("active", state.remoteScreensVisible && hasRemoteScreen);
+  els.remoteScreensButton.classList.toggle("off", !state.remoteScreensVisible && hasRemoteScreen);
+  els.remoteScreensButton.dataset.tooltip = state.remoteScreensVisible
+    ? "Ocultar telas dos outros"
+    : "Mostrar telas dos outros";
+  els.remoteScreensButton.setAttribute("aria-pressed", String(state.remoteScreensVisible));
+
   updateMicMonitorDisplay();
 }
 
@@ -1950,7 +2088,13 @@ function stopOutboundAudioMonitor() {
   }
 
   state.outboundAudioStats.clear();
+  state.audioConnectingTicks = 0;
+  state.lastAutoReconnectAt = 0;
   setCallAudioStatus("Usando padrão do sistema", "idle");
+}
+
+function resetAudioConnectingWatch() {
+  state.audioConnectingTicks = 0;
 }
 
 async function updateOutboundAudioStatus() {
@@ -1959,21 +2103,25 @@ async function updateOutboundAudioStatus() {
   const hasMic = Boolean(state.audioTrack && state.audioTrack.readyState === "live");
 
   if (!state.joined) {
+    resetAudioConnectingWatch();
     setCallAudioStatus("Usando padrão do sistema", "idle");
     return;
   }
 
   if (!hasMic) {
+    resetAudioConnectingWatch();
     setCallAudioStatus("Sem microfone ativo", "bad");
     return;
   }
 
   if (!state.micEnabled) {
+    resetAudioConnectingWatch();
     setCallAudioStatus("Microfone mutado", "bad");
     return;
   }
 
   if (!state.peers.size) {
+    resetAudioConnectingWatch();
     setCallAudioStatus("Microfone ok • aguardando amigos", "ok");
     return;
   }
@@ -1986,12 +2134,20 @@ async function updateOutboundAudioStatus() {
   const isSending = values.some((value) => value?.sent);
 
   if (isSending) {
+    resetAudioConnectingWatch();
     setCallAudioStatus("Voz saindo para a chamada", "ok");
   } else if (hasReport && state.micLevel > 0.08) {
+    resetAudioConnectingWatch();
     setCallAudioStatus("Captando • aguardando envio", "warn");
   } else if (hasReport) {
+    resetAudioConnectingWatch();
     setCallAudioStatus("Fale para validar envio", "idle");
   } else {
+    state.audioConnectingTicks += 1;
+    if (state.audioConnectingTicks >= 4 && Date.now() - state.lastAutoReconnectAt > 15000) {
+      state.lastAutoReconnectAt = Date.now();
+      reconnectMediaConnections(false);
+    }
     setCallAudioStatus("Conectando áudio...", "warn");
   }
 }
@@ -2213,6 +2369,9 @@ async function leaveRoom() {
   state.screenTrack = null;
   state.selectedPeerId = null;
   state.peerAudioPrefs.clear();
+  state.audioConnectingTicks = 0;
+  state.lastAutoReconnectAt = 0;
+  state.mediaReconnectInFlight = false;
 
   els.messages.replaceChildren();
   els.joinButton.disabled = false;
