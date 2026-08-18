@@ -82,6 +82,9 @@ const state = {
   serverId: "",
   serverName: "",
   inviteServerName: "",
+  rtcIceServers: null,
+  rtcForceRelay: false,
+  rtcConfigSource: "default",
   channelId: "voz-geral",
   channelName: "Voz geral",
   roomId: "",
@@ -96,6 +99,14 @@ const state = {
   audioInputId: "",
   outputMuted: false,
   audioOutputId: "",
+  rawAudioTrack: null,
+  audioProcessingContext: null,
+  audioProcessingSource: null,
+  audioProcessingHighPass: null,
+  audioProcessingLowPass: null,
+  audioProcessingGate: null,
+  audioProcessingCompressor: null,
+  audioProcessingDestination: null,
   audioContext: null,
   micSource: null,
   micAnalyser: null,
@@ -108,6 +119,7 @@ const state = {
   lastAutoReconnectAt: 0,
   mediaReconnectInFlight: false,
   audioUnlockToastShown: false,
+  turnWarningShown: false,
   remoteScreensVisible: true,
   chatCollapsed: false,
   chatUnread: false,
@@ -332,6 +344,7 @@ async function joinRoom(event) {
   renderSavedServers();
 
   await prepareLocalMedia();
+  await refreshRtcConfig();
 
   setJoinStatus("Conectando na sala...");
 
@@ -770,8 +783,16 @@ function getAudioConstraints() {
   const constraints = {
     echoCancellation: true,
     noiseSuppression: supported.noiseSuppression ? state.noiseSuppressionEnabled : undefined,
-    autoGainControl: supported.autoGainControl ? true : undefined
+    autoGainControl: supported.autoGainControl ? !state.noiseSuppressionEnabled : undefined
   };
+
+  if (supported.channelCount) {
+    constraints.channelCount = { ideal: 1 };
+  }
+
+  if (supported.sampleRate) {
+    constraints.sampleRate = { ideal: 48000 };
+  }
 
   if (state.audioInputId) {
     constraints.deviceId = { exact: state.audioInputId };
@@ -781,7 +802,10 @@ function getAudioConstraints() {
 }
 
 function supportsNoiseSuppression() {
-  return Boolean(navigator.mediaDevices?.getSupportedConstraints?.()?.noiseSuppression);
+  return Boolean(
+    navigator.mediaDevices?.getSupportedConstraints?.()?.noiseSuppression
+    || supportsLocalVoiceProcessing()
+  );
 }
 
 async function getMicrophoneStream() {
@@ -790,9 +814,10 @@ async function getMicrophoneStream() {
   }
 
   try {
-    return await navigator.mediaDevices.getUserMedia({
+    const stream = await navigator.mediaDevices.getUserMedia({
       audio: getAudioConstraints()
     });
+    return createMicrophoneOutputStream(stream);
   } catch (error) {
     if (!state.audioInputId) {
       throw error;
@@ -802,9 +827,167 @@ async function getMicrophoneStream() {
     state.audioInputId = "";
     await refreshAudioInputs();
 
-    return navigator.mediaDevices.getUserMedia({
+    const stream = await navigator.mediaDevices.getUserMedia({
       audio: getAudioConstraints()
     });
+    return createMicrophoneOutputStream(stream);
+  }
+}
+
+function supportsLocalVoiceProcessing() {
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  return Boolean(AudioContextClass && typeof MediaStream !== "undefined");
+}
+
+function createMicrophoneOutputStream(rawStream) {
+  if (!state.noiseSuppressionEnabled || !supportsLocalVoiceProcessing()) {
+    cleanupAudioProcessing(true);
+    return rawStream;
+  }
+
+  const rawTrack = rawStream.getAudioTracks()[0] || null;
+  if (!rawTrack) {
+    cleanupAudioProcessing(true);
+    return rawStream;
+  }
+
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+
+  try {
+    cleanupAudioProcessing(true);
+
+    const context = new AudioContextClass({ sampleRate: 48000 });
+    if (typeof context.createScriptProcessor !== "function") {
+      context.close().catch(() => {});
+      return rawStream;
+    }
+
+    if (context.state === "suspended") {
+      context.resume().catch(() => {});
+    }
+
+    const source = context.createMediaStreamSource(new MediaStream([rawTrack]));
+    const highPass = context.createBiquadFilter();
+    const lowPass = context.createBiquadFilter();
+    const gate = context.createScriptProcessor(1024, 1, 1);
+    const compressor = context.createDynamicsCompressor();
+    const destination = context.createMediaStreamDestination();
+
+    highPass.type = "highpass";
+    highPass.frequency.value = 120;
+    highPass.Q.value = 0.7;
+
+    lowPass.type = "lowpass";
+    lowPass.frequency.value = 8200;
+    lowPass.Q.value = 0.7;
+
+    compressor.threshold.value = -32;
+    compressor.knee.value = 18;
+    compressor.ratio.value = 3;
+    compressor.attack.value = 0.008;
+    compressor.release.value = 0.18;
+
+    let smoothGain = 1;
+    let noiseFloor = 0.018;
+
+    gate.onaudioprocess = (event) => {
+      const input = event.inputBuffer.getChannelData(0);
+      const output = event.outputBuffer.getChannelData(0);
+      let sum = 0;
+
+      for (let index = 0; index < input.length; index += 1) {
+        sum += input[index] * input[index];
+      }
+
+      const rms = Math.sqrt(sum / input.length);
+      if (rms > 0 && rms < noiseFloor * 1.8) {
+        noiseFloor = noiseFloor * 0.96 + rms * 0.04;
+      }
+
+      const threshold = clamp(noiseFloor * 3.2, 0.026, 0.07);
+      const openAmount = clamp((rms - threshold * 0.62) / (threshold * 0.9), 0, 1);
+      const targetGain = 0.08 + (openAmount * openAmount * 0.92);
+      smoothGain = smoothGain * 0.82 + targetGain * 0.18;
+
+      for (let index = 0; index < input.length; index += 1) {
+        output[index] = input[index] * smoothGain;
+      }
+    };
+
+    source.connect(highPass);
+    highPass.connect(lowPass);
+    lowPass.connect(gate);
+    gate.connect(compressor);
+    compressor.connect(destination);
+
+    const processedTrack = destination.stream.getAudioTracks()[0];
+    processedTrack.enabled = rawTrack.enabled;
+    processedTrack.addEventListener("ended", () => {
+      if (rawTrack.readyState === "live") {
+        rawTrack.stop();
+      }
+    });
+
+    state.rawAudioTrack = rawTrack;
+    state.audioProcessingContext = context;
+    state.audioProcessingSource = source;
+    state.audioProcessingHighPass = highPass;
+    state.audioProcessingLowPass = lowPass;
+    state.audioProcessingGate = gate;
+    state.audioProcessingCompressor = compressor;
+    state.audioProcessingDestination = destination;
+
+    return new MediaStream([processedTrack]);
+  } catch (error) {
+    console.warn("Falha no processamento local de voz:", error);
+    cleanupAudioProcessing(false);
+    return rawStream;
+  }
+}
+
+function cleanupAudioProcessing(stopRawTrack = true) {
+  const nodes = [
+    state.audioProcessingSource,
+    state.audioProcessingHighPass,
+    state.audioProcessingLowPass,
+    state.audioProcessingGate,
+    state.audioProcessingCompressor
+  ];
+
+  for (const node of nodes) {
+    try {
+      node?.disconnect?.();
+    } catch {}
+  }
+
+  if (stopRawTrack && state.rawAudioTrack?.readyState === "live") {
+    state.rawAudioTrack.stop();
+  }
+
+  state.audioProcessingDestination?.stream?.getTracks?.().forEach((track) => {
+    if (track.readyState === "live") {
+      track.stop();
+    }
+  });
+
+  state.audioProcessingContext?.close?.().catch(() => {});
+  state.rawAudioTrack = null;
+  state.audioProcessingContext = null;
+  state.audioProcessingSource = null;
+  state.audioProcessingHighPass = null;
+  state.audioProcessingLowPass = null;
+  state.audioProcessingGate = null;
+  state.audioProcessingCompressor = null;
+  state.audioProcessingDestination = null;
+}
+
+function setMicrophoneTrackEnabled(enabled) {
+  if (state.audioTrack?.readyState === "live") {
+    state.audioTrack.enabled = enabled;
+  }
+
+  if (state.rawAudioTrack?.readyState === "live") {
+    state.rawAudioTrack.enabled = enabled;
   }
 }
 
@@ -839,7 +1022,7 @@ async function prepareLocalMedia() {
 
   if (state.audioTrack?.readyState === "live") {
     state.micEnabled = true;
-    state.audioTrack.enabled = true;
+    setMicrophoneTrackEnabled(true);
     state.cameraTrack = null;
     state.cameraEnabled = false;
     startMicMonitor();
@@ -856,7 +1039,7 @@ async function prepareLocalMedia() {
     state.cameraEnabled = false;
 
     if (state.audioTrack) {
-      state.audioTrack.enabled = true;
+      setMicrophoneTrackEnabled(true);
       startMicMonitor();
     }
     await refreshMediaDevices();
@@ -885,6 +1068,7 @@ function enterApp(message) {
   els.channelLabel.textContent = state.channelName;
   setConnectionStatus("connected", "Conectado");
   setJoinStatus("");
+  showRtcRelayStatus();
 
   const url = new URL(window.location.href);
   url.searchParams.delete("room");
@@ -905,31 +1089,78 @@ function enterApp(message) {
   els.messageInput.focus();
 }
 
-function getIceServers() {
+async function refreshRtcConfig() {
+  const fallback = getStaticRtcConfig();
+
+  state.rtcIceServers = fallback.iceServers;
+  state.rtcForceRelay = fallback.forceRelay;
+  state.rtcConfigSource = fallback.source;
+
+  try {
+    const response = await fetch("/api/ice", { cache: "no-store" });
+    if (!response.ok) return;
+
+    const data = await response.json();
+    if (Array.isArray(data.iceServers) && data.iceServers.length) {
+      state.rtcIceServers = [...DEFAULT_ICE_SERVERS, ...data.iceServers];
+      state.rtcForceRelay = Boolean(data.forceRelay);
+      state.rtcConfigSource = data.source || "api";
+    }
+  } catch (error) {
+    console.warn("Falha ao carregar config ICE:", error);
+  }
+}
+
+function getStaticRtcConfig() {
   const rtcConfig = window.PONTE_RTC_CONFIG || {};
   const turnUrls = Array.isArray(rtcConfig.turnUrls)
     ? rtcConfig.turnUrls.filter(Boolean)
     : [];
 
   if (!turnUrls.length || !rtcConfig.turnUsername || !rtcConfig.turnCredential) {
-    return DEFAULT_ICE_SERVERS;
+    return { iceServers: DEFAULT_ICE_SERVERS, forceRelay: false, source: "default" };
   }
 
-  return [
-    ...DEFAULT_ICE_SERVERS,
-    {
-      urls: turnUrls,
-      username: rtcConfig.turnUsername,
-      credential: rtcConfig.turnCredential
-    }
-  ];
+  return {
+    iceServers: [
+      ...DEFAULT_ICE_SERVERS,
+      {
+        urls: turnUrls,
+        username: rtcConfig.turnUsername,
+        credential: rtcConfig.turnCredential
+      }
+    ],
+    forceRelay: Boolean(rtcConfig.forceRelay),
+    source: "static"
+  };
+}
+
+function getPeerConnectionConfig() {
+  return {
+    iceServers: state.rtcIceServers || DEFAULT_ICE_SERVERS,
+    iceTransportPolicy: state.rtcForceRelay ? "relay" : "all"
+  };
+}
+
+function showRtcRelayStatus() {
+  if (state.turnWarningShown || isLocalHost()) return;
+  state.turnWarningShown = true;
+
+  const hasTurn = (state.rtcIceServers || []).some((server) => {
+    const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
+    return urls.some((url) => String(url || "").startsWith("turn:") || String(url || "").startsWith("turns:"));
+  });
+
+  if (!hasTurn) {
+    toast("Sem servidor TURN: algumas redes podem conectar sala e falhar audio entre amigos.");
+  }
 }
 
 function createPeer(meta, shouldOffer) {
   if (!meta?.id || meta.id === state.selfId) return state.peers.get(meta?.id);
   if (state.peers.has(meta.id)) return state.peers.get(meta.id);
 
-  const pc = new RTCPeerConnection({ iceServers: getIceServers() });
+  const pc = new RTCPeerConnection(getPeerConnectionConfig());
   const remoteStream = new MediaStream();
 
   const audioTransceiver = pc.addTransceiver("audio", { direction: "sendrecv" });
@@ -1198,7 +1429,7 @@ async function toggleMicrophone() {
       state.audioTrack = stream.getAudioTracks()[0] || null;
       state.micEnabled = Boolean(state.audioTrack);
       if (state.audioTrack) {
-        state.audioTrack.enabled = true;
+        setMicrophoneTrackEnabled(true);
         startMicMonitor();
         await refreshMediaDevices();
       }
@@ -1209,7 +1440,7 @@ async function toggleMicrophone() {
     }
   } else {
     state.micEnabled = !state.micEnabled;
-    state.audioTrack.enabled = state.micEnabled;
+    setMicrophoneTrackEnabled(state.micEnabled);
   }
 
   await replaceAudioForAll();
@@ -1222,7 +1453,7 @@ async function toggleMicrophone() {
 
 async function toggleNoiseSuppression() {
   if (!supportsNoiseSuppression()) {
-    toast("Este navegador não oferece supressão de ruído nativa.");
+    toast("Este navegador nao oferece processamento de ruido.");
     updateControls();
     return;
   }
@@ -1231,7 +1462,7 @@ async function toggleNoiseSuppression() {
   updateControls();
 
   if (!state.audioTrack || state.audioTrack.readyState === "ended") {
-    toast(state.noiseSuppressionEnabled ? "Supressão de ruído ligada." : "Supressão de ruído desligada.");
+    toast(state.noiseSuppressionEnabled ? "Supressao forte ligada." : "Supressao de ruido desligada.");
     return;
   }
 
@@ -1244,7 +1475,7 @@ async function toggleNoiseSuppression() {
     state.micEnabled = Boolean(state.audioTrack && wasEnabled);
 
     if (state.audioTrack) {
-      state.audioTrack.enabled = wasEnabled;
+      setMicrophoneTrackEnabled(wasEnabled);
       oldTrack.stop();
       startMicMonitor();
       await replaceAudioForAll();
@@ -1254,12 +1485,12 @@ async function toggleNoiseSuppression() {
       sendMediaState();
     }
 
-    toast(state.noiseSuppressionEnabled ? "Supressão de ruído ligada." : "Supressão de ruído desligada.");
+    toast(state.noiseSuppressionEnabled ? "Supressao forte ligada." : "Supressao de ruido desligada.");
   } catch (error) {
     state.noiseSuppressionEnabled = !state.noiseSuppressionEnabled;
     updateControls();
     console.warn("Falha ao alternar supressão de ruído:", error);
-    toast("Não consegui trocar a supressão de ruído.");
+    toast("Nao consegui trocar a supressao de ruido.");
   }
 }
 
@@ -1288,7 +1519,7 @@ async function changeAudioInput(event) {
 
     state.audioTrack = track;
     state.micEnabled = shouldEnable;
-    state.audioTrack.enabled = shouldEnable;
+    setMicrophoneTrackEnabled(shouldEnable);
 
     if (previousTrack && previousTrack !== state.audioTrack && previousTrack.readyState === "live") {
       previousTrack.stop();
@@ -1499,7 +1730,7 @@ async function testSetupMicrophone() {
     await changeAudioInput({ currentTarget: els.setupMicInputSelect });
     if (state.audioTrack?.readyState === "live") {
       state.micEnabled = true;
-      state.audioTrack.enabled = true;
+      setMicrophoneTrackEnabled(true);
       startMicMonitor();
       setSetupAudioStatus("Fale agora. Se a barra mexer, a entrada esta ok.", "ok");
     }
@@ -2612,6 +2843,7 @@ async function leaveRoom() {
 
 function stopAllMedia() {
   stopMicMonitor(true);
+  cleanupAudioProcessing(true);
 
   for (const track of [state.audioTrack, state.cameraTrack, state.screenTrack]) {
     if (track?.readyState === "live") {
