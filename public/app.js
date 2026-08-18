@@ -1544,6 +1544,7 @@ function updateTile(peerId, override = null) {
   tile.root.classList.toggle("has-video", shouldShowVideo);
   tile.root.classList.toggle("audio-only", !shouldShowVideo);
   tile.root.classList.toggle("screen", Boolean(mediaState.screenEnabled));
+  tile.root.classList.toggle("screen-focus", Boolean(mediaState.screenEnabled && shouldShowVideo));
   if (tile.video.srcObject !== stream) {
     tile.video.srcObject = stream;
   }
@@ -1634,8 +1635,10 @@ function resumeRemoteMedia() {
 
 function updateStageLayout() {
   const hasVisualTile = [...state.tiles.values()].some((tile) => tile.root.classList.contains("has-video"));
+  const hasScreenTile = [...state.tiles.values()].some((tile) => tile.root.classList.contains("screen-focus"));
   els.videoGrid.classList.toggle("audio-layout", !hasVisualTile);
   els.videoGrid.classList.toggle("media-layout", hasVisualTile);
+  els.videoGrid.classList.toggle("screen-focus-layout", hasScreenTile);
 }
 
 function renderPeople() {
