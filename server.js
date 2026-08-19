@@ -7,7 +7,6 @@ loadLocalEnv(path.join(__dirname, ".env.local"));
 
 const PORT = Number(process.env.PORT || 8081);
 const PUBLIC_DIR = path.join(__dirname, "public");
-const dailyRoomHandler = require("./api/daily-room");
 const iceHandler = require("./api/ice");
 
 const MIME_TYPES = {
@@ -32,11 +31,6 @@ const server = http.createServer((req, res) => {
   if (url.pathname === "/health") {
     res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
     res.end(JSON.stringify({ ok: true }));
-    return;
-  }
-
-  if (url.pathname === "/api/daily-room") {
-    runApiHandler(req, res, url, dailyRoomHandler);
     return;
   }
 

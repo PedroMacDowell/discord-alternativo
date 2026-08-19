@@ -25,7 +25,6 @@ const hasRequiredConfig = requiredKeys.every((key) => Boolean(config[key]));
 const configForBrowser = hasRequiredConfig ? removeEmptyValues(config) : null;
 const hasTurnConfig = Boolean(rtcConfig.turnUrls.length && rtcConfig.turnUsername && rtcConfig.turnCredential);
 const rtcConfigForBrowser = hasTurnConfig ? rtcConfig : null;
-const hasDailyConfig = Boolean(pickEnv("DAILY_API_KEY"));
 const targetPath = path.join(__dirname, "..", "public", "firebase-config.js");
 
 fs.writeFileSync(
@@ -44,11 +43,7 @@ if (hasRequiredConfig) {
   console.log("Build sem Firebase: defina FIREBASE_API_KEY, FIREBASE_AUTH_DOMAIN, FIREBASE_PROJECT_ID e FIREBASE_APP_ID na Vercel.");
 }
 
-if (hasDailyConfig) {
-  console.log("Daily configurado para chamadas de audio, video e tela.");
-} else {
-  console.log("Build sem Daily: defina DAILY_API_KEY na Vercel para habilitar chamadas de audio, video e tela.");
-}
+console.log("Chamadas configuradas via Jitsi Meet embed, sem chave de API.");
 
 function pickEnv(...keys) {
   for (const key of keys) {
