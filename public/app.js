@@ -1,4 +1,4 @@
-"use strict";
+﻿"use strict";
 
 const els = {
   joinScreen: document.querySelector("#joinScreen"),
@@ -37,7 +37,7 @@ const els = {
   peopleCount: document.querySelector("#peopleCount"),
   peopleList: document.querySelector("#peopleList"),
   videoGrid: document.querySelector("#videoGrid"),
-  dailyCallContainer: document.querySelector("#dailyCallContainer"),
+  jitsiCallContainer: document.querySelector("#jitsiCallContainer"),
   chatPanel: document.querySelector("#chatPanel"),
   toggleChatButton: document.querySelector("#toggleChatButton"),
   messages: document.querySelector("#messages"),
@@ -71,8 +71,9 @@ const DEFAULT_ICE_SERVERS = [
   { urls: "stun:stun.cloudflare.com:3478" }
 ];
 
-const MEDIA_PROVIDER = "daily";
-const DAILY_JS_URL = "https://unpkg.com/@daily-co/daily-js";
+const MEDIA_PROVIDER = "jitsi";
+const JITSI_DOMAIN = "meet.jit.si";
+const JITSI_JS_URL = `https://${JITSI_DOMAIN}/external_api.js`;
 
 const palette = ["#20c7b3", "#ff6b5f", "#f6c85f", "#8bb8ff", "#b98cff", "#7bd88f"];
 const CLIENT_ID = getOrCreateClientId();
@@ -94,9 +95,9 @@ const state = {
   roomId: "",
   userName: "",
   color: colorForId(CLIENT_ID),
-  dailyFrame: null,
-  dailyRoomUrl: "",
-  dailyLeaving: false,
+  jitsiApi: null,
+  jitsiRoomName: "",
+  jitsiLeaving: false,
   cameraTrack: null,
   audioTrack: null,
   screenTrack: null,
@@ -177,7 +178,7 @@ function bootstrap() {
       if (!confirmed) return;
 
       deleteSavedServer(deleteButton.dataset.deleteServerId);
-      toast("Servidor excluído da lista.");
+      toast("Servidor excluÃ­do da lista.");
       return;
     }
 
@@ -223,8 +224,8 @@ function bootstrap() {
   navigator.mediaDevices?.addEventListener?.("devicechange", refreshMediaDevices);
 
   window.addEventListener("beforeunload", () => {
-    state.dailyFrame?.leave?.();
-    state.dailyFrame?.destroy?.();
+    state.jitsiApi?.executeCommand?.("hangup");
+    state.jitsiApi?.dispose?.();
     state.transport?.leave?.(true);
     stopAllMedia();
   });
@@ -342,7 +343,7 @@ async function joinRoom(event) {
   }
 
   els.joinButton.disabled = true;
-  setJoinStatus(usesDailyMedia() ? "Preparando chamada Daily..." : "Abrindo microfone...");
+  setJoinStatus(usesJitsiMedia() ? "Preparando chamada Jitsi..." : "Abrindo microfone...");
 
   state.serverId = serverId;
   state.serverName = resolvedServerName;
@@ -352,7 +353,7 @@ async function joinRoom(event) {
   saveServer({ id: serverId, name: resolvedServerName });
   renderSavedServers();
 
-  if (usesDailyMedia()) {
+  if (usesJitsiMedia()) {
     stopAllMedia();
   } else {
     await prepareLocalMedia();
@@ -369,7 +370,7 @@ async function joinRoom(event) {
     console.error(error);
     const message = error?.code === "firebase-config-missing"
       ? "Configure o Firebase para usar este site na Vercel."
-      : "Não foi possível conectar à sala.";
+      : "NÃ£o foi possÃ­vel conectar Ã  sala.";
     setJoinStatus(message);
     els.joinButton.disabled = false;
     state.transport = null;
@@ -385,7 +386,7 @@ function createTransport() {
     return createWebSocketTransport();
   }
 
-  const error = new Error("Firebase não configurado.");
+  const error = new Error("Firebase nÃ£o configurado.");
   error.code = "firebase-config-missing";
   throw error;
 }
@@ -426,7 +427,7 @@ function createWebSocketTransport() {
         ws.addEventListener("close", () => {
           if (state.joined) {
             setConnectionStatus("offline", "Desconectado");
-            toast("A conexão com a sala caiu.");
+            toast("A conexÃ£o com a sala caiu.");
           }
         });
       });
@@ -522,7 +523,7 @@ function createFirebaseTransport() {
 
         if (peer && peerMeta.sessionId && peer.sessionId && peer.sessionId !== peerMeta.sessionId) {
           removePeer(id, false);
-          if (usesDailyMedia()) {
+          if (usesJitsiMedia()) {
             upsertPresencePeer(peerMeta);
           } else {
             createPeer(peerMeta, false);
@@ -536,7 +537,7 @@ function createFirebaseTransport() {
           continue;
         }
 
-        if (usesDailyMedia()) {
+        if (usesJitsiMedia()) {
           upsertPresencePeer(peerMeta);
           renderPeople();
           continue;
@@ -767,7 +768,7 @@ function dispatchServerMessage(message) {
   }
 
   if (message.type === "peer-joined") {
-    if (usesDailyMedia()) {
+    if (usesJitsiMedia()) {
       upsertPresencePeer(message.peer);
       renderPeople();
       toast(`${message.peer.name} entrou na sala.`);
@@ -787,7 +788,7 @@ function dispatchServerMessage(message) {
   }
 
   if (message.type === "signal") {
-    if (usesDailyMedia()) return;
+    if (usesJitsiMedia()) return;
     receiveSignal(message);
     return;
   }
@@ -801,7 +802,7 @@ function dispatchServerMessage(message) {
     const peer = state.peers.get(message.from);
     if (peer) {
       peer.mediaState = { ...peer.mediaState, ...message.state };
-      if (!usesDailyMedia()) {
+      if (!usesJitsiMedia()) {
         updateTile(peer.id);
       }
       updateControls();
@@ -856,7 +857,7 @@ async function getMicrophoneStream() {
       throw error;
     }
 
-    console.warn("Falha ao usar microfone selecionado, tentando padrão:", error);
+    console.warn("Falha ao usar microfone selecionado, tentando padrÃ£o:", error);
     state.audioInputId = "";
     await refreshAudioInputs();
 
@@ -1028,27 +1029,27 @@ function microphoneErrorMessage(error) {
   const name = error?.name || error?.message || "";
 
   if (name === "NotAllowedError" || name === "SecurityError") {
-    return "Permissão do microfone bloqueada. Libere o microfone no cadeado do navegador.";
+    return "PermissÃ£o do microfone bloqueada. Libere o microfone no cadeado do navegador.";
   }
 
   if (name === "NotFoundError" || name === "DevicesNotFoundError") {
-    return "Não encontrei um microfone disponível neste dispositivo.";
+    return "NÃ£o encontrei um microfone disponÃ­vel neste dispositivo.";
   }
 
   if (name === "NotReadableError" || name === "TrackStartError") {
-    return "O microfone está ocupado ou travado. Feche outro app usando áudio e tente de novo.";
+    return "O microfone estÃ¡ ocupado ou travado. Feche outro app usando Ã¡udio e tente de novo.";
   }
 
   if (name === "OverconstrainedError" || name === "ConstraintNotSatisfiedError") {
-    return "Esse microfone não respondeu. Tente escolher outro na lista.";
+    return "Esse microfone nÃ£o respondeu. Tente escolher outro na lista.";
   }
 
-  return "Não consegui ativar o microfone. Tente escolher outro microfone na lista.";
+  return "NÃ£o consegui ativar o microfone. Tente escolher outro microfone na lista.";
 }
 
 async function prepareLocalMedia() {
   if (!navigator.mediaDevices?.getUserMedia) {
-    toast("Este navegador não liberou o microfone.");
+    toast("Este navegador nÃ£o liberou o microfone.");
     updateMicMonitorDisplay();
     return;
   }
@@ -1077,7 +1078,7 @@ async function prepareLocalMedia() {
     }
     await refreshMediaDevices();
   } catch (error) {
-    console.warn("Falha ao acessar mídia local:", error);
+    console.warn("Falha ao acessar mÃ­dia local:", error);
     state.micEnabled = false;
     state.cameraEnabled = false;
     updateMicMonitorDisplay();
@@ -1094,15 +1095,15 @@ function enterApp(message) {
   els.appScreen.hidden = false;
   els.joinScreen.classList.add("hidden");
   els.appScreen.classList.remove("hidden");
-  els.appScreen.classList.toggle("daily-provider", usesDailyMedia());
+  els.appScreen.classList.toggle("jitsi-provider", usesJitsiMedia());
   els.roomLabel.textContent = state.channelName;
   els.serverNameLabel.textContent = state.serverName;
-  els.serverCodeLabel.textContent = `Código: ${state.serverId}`;
+  els.serverCodeLabel.textContent = `CÃ³digo: ${state.serverId}`;
   els.serverIcon.textContent = getInitial(state.serverName);
   els.channelLabel.textContent = state.channelName;
   setConnectionStatus("connected", "Conectado");
   setJoinStatus("");
-  if (!usesDailyMedia()) {
+  if (!usesJitsiMedia()) {
     showRtcRelayStatus();
   }
 
@@ -1113,17 +1114,17 @@ function enterApp(message) {
   window.history.replaceState({}, "", url);
 
   updateControls();
-  if (!usesDailyMedia()) {
+  if (!usesJitsiMedia()) {
     renderLocalTile();
   }
   renderPeople();
 
-  if (usesDailyMedia()) {
+  if (usesJitsiMedia()) {
     for (const peer of message.peers || []) {
       upsertPresencePeer(peer);
     }
     renderPeople();
-    startDailyCall();
+    startJitsiCall();
   } else {
     sendMediaState();
     for (const peer of message.peers || []) {
@@ -1202,8 +1203,8 @@ function showRtcRelayStatus() {
   }
 }
 
-function usesDailyMedia() {
-  return MEDIA_PROVIDER === "daily";
+function usesJitsiMedia() {
+  return MEDIA_PROVIDER === "jitsi";
 }
 
 function upsertPresencePeer(meta) {
@@ -1225,152 +1226,148 @@ function upsertPresencePeer(meta) {
   });
 }
 
-async function startDailyCall() {
-  if (!els.dailyCallContainer || state.dailyFrame) return;
+async function startJitsiCall() {
+  if (!els.jitsiCallContainer || state.jitsiApi) return;
 
-  els.dailyCallContainer.hidden = false;
+  els.jitsiCallContainer.hidden = false;
   els.videoGrid.hidden = true;
-  setConnectionStatus("connecting", "Abrindo Daily");
-  setCallAudioStatus("Daily cuida do audio da chamada", "ok");
+  setConnectionStatus("connecting", "Abrindo Jitsi");
+  setCallAudioStatus("Jitsi cuida do audio da chamada", "ok");
 
   try {
-    const room = await getDailyRoom();
-    const DailyIframe = await loadDailySdk();
+    await loadJitsiSdk();
 
-    state.dailyRoomUrl = room.url;
-    els.dailyCallContainer.replaceChildren();
+    state.jitsiRoomName = createJitsiRoomName();
+    els.jitsiCallContainer.replaceChildren();
 
-    const frame = DailyIframe.createFrame(els.dailyCallContainer, {
-      iframeStyle: {
-        width: "100%",
-        height: "100%",
-        border: "0",
-        borderRadius: "8px",
-        background: "#0f0d0c"
+    const api = new window.JitsiMeetExternalAPI(JITSI_DOMAIN, {
+      roomName: state.jitsiRoomName,
+      parentNode: els.jitsiCallContainer,
+      width: "100%",
+      height: "100%",
+      userInfo: {
+        displayName: state.userName
       },
-      showLeaveButton: false,
-      showFullscreenButton: true
+      configOverwrite: {
+        prejoinPageEnabled: true,
+        disableDeepLinking: true,
+        startWithAudioMuted: false,
+        startWithVideoMuted: true
+      },
+      interfaceConfigOverwrite: {
+        MOBILE_APP_PROMO: false,
+        TILE_VIEW_MAX_COLUMNS: 4
+      }
     });
 
-    state.dailyFrame = frame;
+    state.jitsiApi = api;
 
-    frame
-      .on("joined-meeting", () => {
-        setConnectionStatus("connected", "Conectado");
-        setCallAudioStatus("Chamada Daily conectada", "ok");
-      })
-      .on("left-meeting", () => {
-        state.dailyFrame = null;
-        if (state.joined && !state.dailyLeaving) {
-          leaveRoom();
-        }
-      })
-      .on("error", (event) => {
-        console.error("Daily error:", event);
-        toast("A chamada Daily encontrou um erro.");
-      });
+    api.addListener("videoConferenceJoined", () => {
+      setConnectionStatus("connected", "Conectado");
+      setCallAudioStatus("Chamada Jitsi conectada", "ok");
+    });
 
-    await frame.join({
-      url: room.url,
-      userName: state.userName,
-      startVideoOff: true,
-      startAudioOff: false
+    api.addListener("readyToClose", () => {
+      state.jitsiApi = null;
+      if (state.joined && !state.jitsiLeaving) {
+        leaveRoom();
+      }
+    });
+
+    api.addListener("videoConferenceLeft", () => {
+      state.jitsiApi = null;
+    });
+
+    api.addListener("errorOccurred", (event) => {
+      console.error("Jitsi error:", event);
+      toast("A chamada Jitsi encontrou um erro.");
     });
   } catch (error) {
-    console.error("Falha ao abrir Daily:", error);
-    setConnectionStatus("offline", "Daily indisponivel");
-    showDailyError(error);
+    console.error("Falha ao abrir Jitsi:", error);
+    setConnectionStatus("offline", "Jitsi indisponivel");
+    showJitsiError(error);
   }
 }
 
-async function getDailyRoom() {
-  const response = await fetch(`/api/daily-room?room=${encodeURIComponent(state.roomId)}`, {
-    cache: "no-store"
-  });
-
-  const data = await response.json().catch(() => ({}));
-
-  if (!response.ok || !data.url) {
-    const error = new Error(data.error || "daily_room_failed");
-    error.code = data.error || "daily_room_failed";
-    throw error;
-  }
-
-  return data;
+function createJitsiRoomName() {
+  const base = `fuck-disc0rd-${state.roomId || state.serverId || "sala"}`;
+  return base
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^A-Za-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 96);
 }
 
-function loadDailySdk() {
-  const existing = window.DailyIframe || window.Daily;
-  if (existing?.createFrame) {
-    return Promise.resolve(existing);
+function loadJitsiSdk() {
+  if (window.JitsiMeetExternalAPI) {
+    return Promise.resolve(window.JitsiMeetExternalAPI);
   }
 
   return new Promise((resolve, reject) => {
-    const currentScript = document.querySelector(`script[src="${DAILY_JS_URL}"]`);
+    const currentScript = document.querySelector(`script[src="${JITSI_JS_URL}"]`);
 
     if (currentScript) {
       currentScript.addEventListener("load", () => {
-        const DailyIframe = window.DailyIframe || window.Daily;
-        DailyIframe?.createFrame ? resolve(DailyIframe) : reject(new Error("daily_sdk_missing"));
+        window.JitsiMeetExternalAPI ? resolve(window.JitsiMeetExternalAPI) : reject(new Error("jitsi_sdk_missing"));
       }, { once: true });
-      currentScript.addEventListener("error", () => reject(new Error("daily_sdk_load_failed")), { once: true });
+      currentScript.addEventListener("error", () => reject(new Error("jitsi_sdk_load_failed")), { once: true });
       return;
     }
 
     const script = document.createElement("script");
-    script.src = DAILY_JS_URL;
+    script.src = JITSI_JS_URL;
     script.crossOrigin = "anonymous";
     script.onload = () => {
-      const DailyIframe = window.DailyIframe || window.Daily;
-      DailyIframe?.createFrame ? resolve(DailyIframe) : reject(new Error("daily_sdk_missing"));
+      window.JitsiMeetExternalAPI ? resolve(window.JitsiMeetExternalAPI) : reject(new Error("jitsi_sdk_missing"));
     };
-    script.onerror = () => reject(new Error("daily_sdk_load_failed"));
+    script.onerror = () => reject(new Error("jitsi_sdk_load_failed"));
     document.head.appendChild(script);
   });
 }
 
-async function stopDailyCall() {
-  if (!state.dailyFrame) return;
+async function stopJitsiCall() {
+  if (!state.jitsiApi) return;
 
-  state.dailyLeaving = true;
-  const frame = state.dailyFrame;
-  state.dailyFrame = null;
+  state.jitsiLeaving = true;
+  const api = state.jitsiApi;
+  state.jitsiApi = null;
 
   try {
-    await frame.leave?.();
+    api.executeCommand?.("hangup");
   } catch {}
 
   try {
-    frame.destroy?.();
+    api.dispose?.();
   } catch {}
 
-  state.dailyLeaving = false;
-  state.dailyRoomUrl = "";
-  if (els.dailyCallContainer) {
-    els.dailyCallContainer.replaceChildren();
-    els.dailyCallContainer.hidden = true;
+  state.jitsiLeaving = false;
+  state.jitsiRoomName = "";
+  if (els.jitsiCallContainer) {
+    els.jitsiCallContainer.replaceChildren();
+    els.jitsiCallContainer.hidden = true;
   }
   if (els.videoGrid) {
     els.videoGrid.hidden = false;
   }
 }
 
-function showDailyError(error) {
-  const message = error?.code === "daily_config_missing"
-    ? "Configure DAILY_API_KEY na Vercel para usar Daily."
-    : "Nao consegui abrir a sala Daily.";
+function showJitsiError(error) {
+  const message = error?.message === "jitsi_sdk_load_failed"
+    ? "Nao consegui carregar o Jitsi. Confira a conexao e tente novamente."
+    : "Nao consegui abrir a sala Jitsi.";
 
-  els.dailyCallContainer.hidden = false;
-  els.dailyCallContainer.replaceChildren();
+  els.jitsiCallContainer.hidden = false;
+  els.jitsiCallContainer.replaceChildren();
 
   const panel = document.createElement("div");
-  panel.className = "daily-error";
+  panel.className = "jitsi-error";
   const title = document.createElement("strong");
-  title.textContent = "Daily nao configurado";
+  title.textContent = "Jitsi indisponivel";
   const text = document.createElement("p");
   text.textContent = message;
   panel.append(title, text);
-  els.dailyCallContainer.appendChild(panel);
+  els.jitsiCallContainer.appendChild(panel);
   toast(message);
 }
 
@@ -1707,7 +1704,7 @@ async function toggleNoiseSuppression() {
   } catch (error) {
     state.noiseSuppressionEnabled = !state.noiseSuppressionEnabled;
     updateControls();
-    console.warn("Falha ao alternar supressão de ruído:", error);
+    console.warn("Falha ao alternar supressÃ£o de ruÃ­do:", error);
     toast("Nao consegui trocar a supressao de ruido.");
   }
 }
@@ -1776,14 +1773,14 @@ async function changeAudioOutput(event) {
   const failed = results.some((result) => result.status === "rejected");
 
   if (failed) {
-    console.warn("Falha ao trocar saída de áudio:", results);
+    console.warn("Falha ao trocar saÃ­da de Ã¡udio:", results);
     state.audioOutputId = "";
     syncAudioOutputSelects();
     await applyAudioOutputForAll();
     resumeRemoteMedia();
     toast(previousOutputId
-      ? "Essa saída falhou. Voltei para a saída padrão."
-      : "Essa saída falhou. Mantive a saída padrão.");
+      ? "Essa saÃ­da falhou. Voltei para a saÃ­da padrÃ£o."
+      : "Essa saÃ­da falhou. Mantive a saÃ­da padrÃ£o.");
     setSetupAudioStatus("Essa saida falhou. Use a saida padrao.", "bad");
     return;
   }
@@ -1973,7 +1970,7 @@ function setSetupAudioStatus(text, tone = "idle") {
 async function playOutputTest() {
   const AudioContextClass = window.AudioContext || window.webkitAudioContext;
   if (!AudioContextClass) {
-    toast("Teste de saída indisponível neste navegador.");
+    toast("Teste de saÃ­da indisponÃ­vel neste navegador.");
     return;
   }
 
@@ -2008,7 +2005,7 @@ async function playOutputTest() {
     toast("Se ouviu o bip, a saida esta ok.");
     setSetupAudioStatus("Se ouviu o bip, a saida esta ok.", "ok");
   } catch (error) {
-    console.warn("Falha no teste de saída:", error);
+    console.warn("Falha no teste de saÃ­da:", error);
     toast("Nao consegui tocar o teste de saida.");
     setSetupAudioStatus("Nao consegui tocar nessa saida.", "bad");
   } finally {
@@ -2062,7 +2059,7 @@ async function toggleCamera() {
         state.cameraTrack.enabled = true;
       }
     } catch (error) {
-      console.warn("Falha ao acessar câmera:", error);
+      console.warn("Falha ao acessar cÃ¢mera:", error);
       state.cameraEnabled = false;
       state.cameraTrack = null;
       toast(cameraErrorMessage(error));
@@ -2137,18 +2134,18 @@ function cameraErrorMessage(error) {
   const name = error?.name || error?.message || "";
 
   if (name === "NotAllowedError" || name === "SecurityError") {
-    return "Permissão da câmera bloqueada. Libere a câmera no cadeado do navegador.";
+    return "PermissÃ£o da cÃ¢mera bloqueada. Libere a cÃ¢mera no cadeado do navegador.";
   }
 
   if (name === "NotFoundError" || name === "DevicesNotFoundError") {
-    return "Não encontrei uma câmera disponível neste dispositivo.";
+    return "NÃ£o encontrei uma cÃ¢mera disponÃ­vel neste dispositivo.";
   }
 
   if (name === "NotReadableError" || name === "TrackStartError") {
-    return "A câmera está ocupada ou travada. Feche outro app usando a webcam e tente de novo.";
+    return "A cÃ¢mera estÃ¡ ocupada ou travada. Feche outro app usando a webcam e tente de novo.";
   }
 
-  return "Não consegui ativar a câmera. Tente trocar a webcam padrão nas permissões do navegador.";
+  return "NÃ£o consegui ativar a cÃ¢mera. Tente trocar a webcam padrÃ£o nas permissÃµes do navegador.";
 }
 
 async function toggleScreenShare() {
@@ -2158,7 +2155,7 @@ async function toggleScreenShare() {
   }
 
   if (!navigator.mediaDevices?.getDisplayMedia) {
-    toast("Compartilhamento de tela não está disponível neste navegador.");
+    toast("Compartilhamento de tela nÃ£o estÃ¡ disponÃ­vel neste navegador.");
     return;
   }
 
@@ -2223,7 +2220,7 @@ function renderLocalTile() {
 
   updateTile("local", {
     id: "local",
-    name: `${state.userName} (você)`,
+    name: `${state.userName} (vocÃª)`,
     color: state.color,
     stream,
     mediaState: currentMediaState(),
@@ -2272,7 +2269,7 @@ function updateTile(peerId, override = null) {
   if (tile.audio.srcObject !== stream) {
     tile.audio.srcObject = stream;
     applyAudioOutputToElement(tile.audio).catch((error) => {
-      console.warn("Falha ao aplicar saída de áudio:", error);
+      console.warn("Falha ao aplicar saÃ­da de Ã¡udio:", error);
     });
   }
   applyTileAudioState(peerId, tile, Boolean(data.isLocal));
@@ -2339,7 +2336,7 @@ function playMediaElement(element, isLocal, requiresAudioTrack) {
 function requestAudioUnlock() {
   if (state.audioUnlockToastShown) return;
   state.audioUnlockToastShown = true;
-  toast("Clique em qualquer lugar da tela para liberar o áudio da chamada.");
+  toast("Clique em qualquer lugar da tela para liberar o Ã¡udio da chamada.");
 }
 
 function resumeRemoteMedia() {
@@ -2366,7 +2363,7 @@ function renderPeople() {
   const people = [
     {
       id: "local",
-      name: `${state.userName || "Você"} (você)`,
+      name: `${state.userName || "VocÃª"} (vocÃª)`,
       color: state.color,
       mediaState: currentMediaState(),
       isLocal: true
@@ -2381,7 +2378,7 @@ function renderPeople() {
 
 function createPersonRow(person) {
   const isLocal = person.id === "local" || person.isLocal;
-  const isOpen = state.selectedPeerId === person.id && !isLocal && !usesDailyMedia();
+  const isOpen = state.selectedPeerId === person.id && !isLocal && !usesJitsiMedia();
   const prefs = isLocal ? null : getPeerAudioPrefs(person.id);
 
   const card = document.createElement("div");
@@ -2389,11 +2386,11 @@ function createPersonRow(person) {
   card.classList.toggle("open", isOpen);
   card.classList.toggle("remote-muted", Boolean(prefs?.muted));
 
-  const row = document.createElement(isLocal || usesDailyMedia() ? "div" : "button");
+  const row = document.createElement(isLocal || usesJitsiMedia() ? "div" : "button");
   row.className = "person-row";
   row.classList.toggle("is-local", isLocal);
-  row.classList.toggle("compact", usesDailyMedia());
-  if (!isLocal && !usesDailyMedia()) {
+  row.classList.toggle("compact", usesJitsiMedia());
+  if (!isLocal && !usesJitsiMedia()) {
     row.type = "button";
     row.dataset.peerRow = person.id;
     row.setAttribute("aria-expanded", String(isOpen));
@@ -2410,14 +2407,14 @@ function createPersonRow(person) {
   name.textContent = person.name;
   const meta = document.createElement("div");
   meta.className = "person-meta";
-  meta.textContent = usesDailyMedia()
-    ? "Na chamada Daily"
+  meta.textContent = usesJitsiMedia()
+    ? "Na chamada Jitsi"
     : (person.mediaState?.screenEnabled ? "Compartilhando tela" : "Na chamada");
   text.append(name, meta);
 
   row.append(avatar, text);
 
-  if (!usesDailyMedia()) {
+  if (!usesJitsiMedia()) {
     const stateIcons = document.createElement("div");
     stateIcons.className = "mini-state";
     stateIcons.append(
@@ -2620,7 +2617,7 @@ function updateControls() {
   const noiseSupported = supportsNoiseSuppression();
   const hasRemoteScreen = [...state.peers.values()].some((peer) => peer.mediaState?.screenEnabled);
 
-  if (usesDailyMedia()) {
+  if (usesJitsiMedia()) {
     els.reconnectButton.disabled = true;
     els.remoteScreensButton.hidden = true;
     updateMicMonitorDisplay();
@@ -2636,10 +2633,10 @@ function updateControls() {
   els.noiseButton.classList.toggle("off", !state.noiseSuppressionEnabled);
   els.noiseButton.disabled = !noiseSupported;
   els.noiseButton.dataset.tooltip = !noiseSupported
-    ? "Supressão indisponível"
+    ? "SupressÃ£o indisponÃ­vel"
     : state.noiseSuppressionEnabled
-      ? "Desligar supressão de ruído"
-      : "Ligar supressão de ruído";
+      ? "Desligar supressÃ£o de ruÃ­do"
+      : "Ligar supressÃ£o de ruÃ­do";
   els.noiseButton.setAttribute("aria-pressed", String(state.noiseSuppressionEnabled));
 
   els.deafenButton.classList.toggle("active", !state.outputMuted);
@@ -2649,7 +2646,7 @@ function updateControls() {
 
   els.cameraButton.classList.toggle("active", state.cameraEnabled && !state.screenTrack);
   els.cameraButton.classList.toggle("off", !state.cameraEnabled && !state.screenTrack);
-  els.cameraButton.dataset.tooltip = state.cameraEnabled ? "Desligar câmera" : "Ligar câmera";
+  els.cameraButton.dataset.tooltip = state.cameraEnabled ? "Desligar cÃ¢mera" : "Ligar cÃ¢mera";
   els.cameraButton.setAttribute("aria-pressed", String(state.cameraEnabled));
 
   els.screenButton.classList.toggle("active", Boolean(state.screenTrack));
@@ -2702,7 +2699,7 @@ function stopOutboundAudioMonitor() {
   state.inboundAudioStats.clear();
   state.audioConnectingTicks = 0;
   state.lastAutoReconnectAt = 0;
-  setCallAudioStatus("Usando padrão do sistema", "idle");
+  setCallAudioStatus("Usando padrÃ£o do sistema", "idle");
 }
 
 function resetAudioConnectingWatch() {
@@ -2716,7 +2713,7 @@ async function updateOutboundAudioStatus() {
 
   if (!state.joined) {
     resetAudioConnectingWatch();
-    setCallAudioStatus("Usando padrão do sistema", "idle");
+    setCallAudioStatus("Usando padrÃ£o do sistema", "idle");
     return;
   }
 
@@ -2734,7 +2731,7 @@ async function updateOutboundAudioStatus() {
 
   if (!state.peers.size) {
     resetAudioConnectingWatch();
-    setCallAudioStatus("Microfone ok • aguardando amigos", "ok");
+    setCallAudioStatus("Microfone ok â€¢ aguardando amigos", "ok");
     return;
   }
 
@@ -2750,7 +2747,7 @@ async function updateOutboundAudioStatus() {
     setCallAudioStatus("Voz saindo para a chamada", "ok");
   } else if (hasReport && state.micLevel > 0.08) {
     resetAudioConnectingWatch();
-    setCallAudioStatus("Captando • aguardando envio", "warn");
+    setCallAudioStatus("Captando â€¢ aguardando envio", "warn");
   } else if (hasReport) {
     resetAudioConnectingWatch();
     setCallAudioStatus("Fale para validar envio", "idle");
@@ -2760,7 +2757,7 @@ async function updateOutboundAudioStatus() {
       state.lastAutoReconnectAt = Date.now();
       reconnectMediaConnections(false);
     }
-    setCallAudioStatus("Conectando áudio...", "warn");
+    setCallAudioStatus("Conectando Ã¡udio...", "warn");
   }
 }
 
@@ -2893,7 +2890,7 @@ function startMicMonitor() {
 
   const AudioContextClass = window.AudioContext || window.webkitAudioContext;
   if (!AudioContextClass) {
-    updateMicMonitorDisplay("Medidor indisponível");
+    updateMicMonitorDisplay("Medidor indisponÃ­vel");
     return;
   }
 
@@ -2932,7 +2929,7 @@ function startMicMonitor() {
     tick();
   } catch (error) {
     console.warn("Falha no medidor de microfone:", error);
-    updateMicMonitorDisplay("Medidor indisponível");
+    updateMicMonitorDisplay("Medidor indisponÃ­vel");
   }
 }
 
@@ -3034,7 +3031,7 @@ async function copyInviteLink() {
 }
 
 async function leaveRoom() {
-  await stopDailyCall();
+  await stopJitsiCall();
   await state.transport?.leave?.();
   state.transport = null;
 
