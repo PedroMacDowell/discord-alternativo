@@ -1,6 +1,8 @@
 const fs = require("fs");
 const path = require("path");
 
+loadLocalEnv(path.join(__dirname, "..", ".env.local"));
+
 const config = {
   apiKey: pickEnv("FIREBASE_API_KEY", "VITE_FIREBASE_API_KEY"),
   authDomain: pickEnv("FIREBASE_AUTH_DOMAIN", "VITE_FIREBASE_AUTH_DOMAIN"),
@@ -23,6 +25,7 @@ const hasRequiredConfig = requiredKeys.every((key) => Boolean(config[key]));
 const configForBrowser = hasRequiredConfig ? removeEmptyValues(config) : null;
 const hasTurnConfig = Boolean(rtcConfig.turnUrls.length && rtcConfig.turnUsername && rtcConfig.turnCredential);
 const rtcConfigForBrowser = hasTurnConfig ? rtcConfig : null;
+const hasDailyConfig = Boolean(pickEnv("DAILY_API_KEY"));
 const targetPath = path.join(__dirname, "..", "public", "firebase-config.js");
 
 fs.writeFileSync(
@@ -41,10 +44,10 @@ if (hasRequiredConfig) {
   console.log("Build sem Firebase: defina FIREBASE_API_KEY, FIREBASE_AUTH_DOMAIN, FIREBASE_PROJECT_ID e FIREBASE_APP_ID na Vercel.");
 }
 
-if (hasTurnConfig) {
-  console.log("TURN configurado para WebRTC.");
+if (hasDailyConfig) {
+  console.log("Daily configurado para chamadas de audio, video e tela.");
 } else {
-  console.log("Build sem TURN: STUN sera usado; configure RTC_TURN_URLS, RTC_TURN_USERNAME e RTC_TURN_CREDENTIAL para redes restritas.");
+  console.log("Build sem Daily: defina DAILY_API_KEY na Vercel para habilitar chamadas de audio, video e tela.");
 }
 
 function pickEnv(...keys) {
@@ -68,4 +71,31 @@ function readBooleanEnv(...keys) {
 
 function removeEmptyValues(value) {
   return Object.fromEntries(Object.entries(value).filter(([, item]) => Boolean(item)));
+}
+
+function loadLocalEnv(filePath) {
+  if (!fs.existsSync(filePath)) return;
+
+  const lines = fs.readFileSync(filePath, "utf8").split(/\r?\n/);
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+
+    const separatorIndex = trimmed.indexOf("=");
+    if (separatorIndex <= 0) continue;
+
+    const key = trimmed.slice(0, separatorIndex).trim();
+    let value = trimmed.slice(separatorIndex + 1).trim();
+
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+
+    if (key && process.env[key] === undefined) {
+      process.env[key] = value;
+    }
+  }
 }

@@ -1,6 +1,8 @@
 # Fuck Disc0rd
 
-Um site estilo Discord para criar servidores, entrar por código ou convite, falar por áudio, ligar a câmera quando quiser, compartilhar tela e conversar por chat.
+Um site estilo Discord para criar servidores, entrar por codigo ou convite, conversar por chat e fazer chamadas com audio, video e compartilhamento de tela.
+
+A chamada agora usa Daily. Isso evita os problemas de WebRTC direto entre amigos em redes diferentes, porque o Daily ja cuida de SFU, TURN, permissoes, camera, microfone, tela cheia, troca de dispositivos e supressao de ruido.
 
 ## Testar localmente
 
@@ -14,26 +16,23 @@ Depois abra:
 http://localhost:8081
 ```
 
-Crie um servidor, copie o convite pelo botão de link e envie para quem vai entrar.
+Para testar chamadas Daily localmente, crie um arquivo `.env.local` ou exporte esta variavel no terminal antes de iniciar:
 
-Localmente o app usa o servidor `server.js` como sinalização WebSocket.
+```text
+DAILY_API_KEY
+```
 
-## Controles
+Sem `DAILY_API_KEY`, o app ainda abre, mas a area da chamada mostra que o Daily nao esta configurado.
 
-- O microfone liga ao entrar e mostra um medidor no rodapé. Se a barra mexer quando você fala, o microfone está funcionando.
-- A supressão de ruído fica ligada por padrão quando o navegador oferece suporte.
-- A câmera começa desligada e só abre quando você clicar no botão de câmera.
-- O botão de fone muta ou desmuta o áudio que você recebe dos outros participantes.
+## Como funciona
+
+- Firebase/Firestore: login anonimo, servidores salvos, presenca e chat.
+- Daily: audio, video, compartilhamento de tela, fullscreen e seletor de dispositivos.
+- Vercel: hospeda o site estatico e a rota serverless `/api/daily-room`, que cria ou reutiliza a sala Daily do servidor.
 
 ## Publicar na Vercel
 
-Na Vercel, o app roda como site estático e usa Firebase/Firestore como sinalização da chamada.
-
-1. Crie um projeto no Firebase.
-2. Adicione um app Web no Firebase e copie a configuração.
-3. Ative Authentication > Sign-in method > Anonymous.
-4. Ative Firestore Database.
-5. Na Vercel, configure estas Environment Variables:
+Na Vercel, configure estas Environment Variables:
 
 ```text
 FIREBASE_API_KEY
@@ -43,27 +42,55 @@ FIREBASE_APP_ID
 FIREBASE_STORAGE_BUCKET
 FIREBASE_MESSAGING_SENDER_ID
 FIREBASE_MEASUREMENT_ID
+DAILY_API_KEY
 ```
 
-As quatro obrigatórias são `FIREBASE_API_KEY`, `FIREBASE_AUTH_DOMAIN`, `FIREBASE_PROJECT_ID` e `FIREBASE_APP_ID`.
+As quatro obrigatorias do Firebase sao:
 
-As regras do Firestore ficam em `firestore.rules`. Elas exigem login anônimo e limitam escrita de participantes, mensagens e sinais de chamada ao usuário autenticado da sessão.
+```text
+FIREBASE_API_KEY
+FIREBASE_AUTH_DOMAIN
+FIREBASE_PROJECT_ID
+FIREBASE_APP_ID
+```
 
-Depois faça o deploy pela Vercel. O build command já está configurado como:
+A variavel obrigatoria para chamada funcionar e:
+
+```text
+DAILY_API_KEY
+```
+
+Depois faca o deploy pela Vercel. O build command ja esta configurado como:
 
 ```bash
 npm run build
 ```
 
-E o output directory está configurado como:
+E o output directory esta configurado como:
 
 ```text
 public
 ```
 
-## Observações importantes
+## Firebase
 
-- Câmera, microfone e compartilhamento de tela funcionam melhor em `localhost` ou em uma URL `https`.
-- Para amigos fora da sua rede, use a URL HTTPS da Vercel.
-- O app usa WebRTC com servidores STUN públicos. Em algumas redes, chamadas podem precisar de um servidor TURN para funcionar 100%.
-- As salas não têm senha por enquanto; use nomes de sala difíceis de adivinhar se quiser mais privacidade.
+No console do Firebase:
+
+1. Crie um projeto.
+2. Adicione um app Web e copie a configuracao.
+3. Ative Authentication > Sign-in method > Anonymous.
+4. Ative Firestore Database.
+5. Publique as regras de `firestore.rules`.
+
+As regras exigem login anonimo e limitam escrita de participantes, mensagens e dados da sala ao usuario autenticado da sessao.
+
+## Daily
+
+No painel do Daily:
+
+1. Crie uma conta.
+2. Abra Developers ou API keys.
+3. Copie a API key.
+4. Coloque essa chave na Vercel como `DAILY_API_KEY`.
+
+Nao precisa configurar Metered/TURN para o fluxo principal.

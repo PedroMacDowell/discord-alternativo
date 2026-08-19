@@ -617,6 +617,14 @@ input:focus {
   grid-template-columns: 278px minmax(0, 1fr) 58px;
 }
 
+.app-shell.daily-provider {
+  grid-template-rows: 70px minmax(0, 1fr);
+}
+
+.app-shell.daily-provider .control-dock {
+  display: none;
+}
+
 .topbar {
   grid-column: 1 / -1;
   display: flex;
@@ -916,6 +924,10 @@ input:focus {
   cursor: default;
 }
 
+.person-row.compact {
+  grid-template-columns: 36px minmax(0, 1fr);
+}
+
 .person-row.is-local:hover,
 .person-card.open .person-row:hover {
   background: transparent;
@@ -1032,6 +1044,59 @@ input:focus {
     repeating-linear-gradient(0deg, rgba(255, 248, 239, 0.012) 0 1px, transparent 1px 9px),
     linear-gradient(180deg, rgba(201, 135, 104, 0.035), transparent 42%),
     #151311;
+}
+
+.app-shell.daily-provider .stage {
+  display: grid;
+  padding: 14px;
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, rgba(85, 214, 194, 0.035), transparent 44%),
+    #100f0e;
+}
+
+.daily-call-container {
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  border: 1px solid rgba(255, 248, 239, 0.09);
+  border-radius: var(--radius);
+  background: #0f0d0c;
+  box-shadow: var(--shadow-sm);
+}
+
+.daily-call-container iframe {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.app-shell.daily-provider .video-grid {
+  display: none;
+}
+
+.daily-error {
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 10px;
+  min-height: 100%;
+  padding: 28px;
+  color: var(--text);
+  text-align: center;
+}
+
+.daily-error strong {
+  font-size: 1.05rem;
+}
+
+.daily-error p {
+  max-width: 420px;
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.45;
 }
 
 .video-grid {
@@ -1582,6 +1647,16 @@ input:focus {
     grid-template-rows: 70px 190px minmax(0, 1fr) 58px 86px;
   }
 
+  .app-shell.daily-provider,
+  .app-shell.daily-provider.chat-collapsed {
+    grid-template-columns: 236px minmax(0, 1fr);
+    grid-template-rows: 70px 190px minmax(0, 1fr) 284px;
+  }
+
+  .app-shell.daily-provider.chat-collapsed {
+    grid-template-rows: 70px 190px minmax(0, 1fr) 58px;
+  }
+
   .server-panel {
     grid-column: 1 / 2;
     grid-row: 2 / 4;
@@ -1627,6 +1702,12 @@ input:focus {
   .app-shell.chat-collapsed {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto auto minmax(320px, 1fr) auto auto;
+  }
+
+  .app-shell.daily-provider,
+  .app-shell.daily-provider.chat-collapsed {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(420px, 1fr) auto;
   }
 
   .topbar {

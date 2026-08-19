@@ -3,8 +3,12 @@ const fs = require("fs");
 const http = require("http");
 const path = require("path");
 
+loadLocalEnv(path.join(__dirname, ".env.local"));
+
 const PORT = Number(process.env.PORT || 8081);
 const PUBLIC_DIR = path.join(__dirname, "public");
+const dailyRoomHandler = require("./api/daily-room");
+const iceHandler = require("./api/ice");
 
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -23,9 +27,21 @@ const clients = new Map();
 const rooms = new Map();
 
 const server = http.createServer((req, res) => {
-  if (req.url === "/health") {
+  const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+
+  if (url.pathname === "/health") {
     res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
     res.end(JSON.stringify({ ok: true }));
+    return;
+  }
+
+  if (url.pathname === "/api/daily-room") {
+    runApiHandler(req, res, url, dailyRoomHandler);
+    return;
+  }
+
+  if (url.pathname === "/api/ice") {
+    runApiHandler(req, res, url, iceHandler);
     return;
   }
 
@@ -66,6 +82,44 @@ server.on("upgrade", (req, socket) => {
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`Servidor rodando em http://localhost:${PORT}`);
 });
+
+function runApiHandler(req, res, url, handler) {
+  req.query = Object.fromEntries(url.searchParams.entries());
+  Promise.resolve(handler(req, res)).catch((error) => {
+    console.error("Erro na API local:", error);
+    if (!res.headersSent) {
+      res.writeHead(500, { "Content-Type": "application/json; charset=utf-8" });
+    }
+    res.end(JSON.stringify({ error: "api_error" }));
+  });
+}
+
+function loadLocalEnv(filePath) {
+  if (!fs.existsSync(filePath)) return;
+
+  const lines = fs.readFileSync(filePath, "utf8").split(/\r?\n/);
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+
+    const separatorIndex = trimmed.indexOf("=");
+    if (separatorIndex <= 0) continue;
+
+    const key = trimmed.slice(0, separatorIndex).trim();
+    let value = trimmed.slice(separatorIndex + 1).trim();
+
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+
+    if (key && process.env[key] === undefined) {
+      process.env[key] = value;
+    }
+  }
+}
 
 function serveStatic(req, res) {
   const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);

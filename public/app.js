@@ -37,6 +37,7 @@ const els = {
   peopleCount: document.querySelector("#peopleCount"),
   peopleList: document.querySelector("#peopleList"),
   videoGrid: document.querySelector("#videoGrid"),
+  dailyCallContainer: document.querySelector("#dailyCallContainer"),
   chatPanel: document.querySelector("#chatPanel"),
   toggleChatButton: document.querySelector("#toggleChatButton"),
   messages: document.querySelector("#messages"),
@@ -70,6 +71,9 @@ const DEFAULT_ICE_SERVERS = [
   { urls: "stun:stun.cloudflare.com:3478" }
 ];
 
+const MEDIA_PROVIDER = "daily";
+const DAILY_JS_URL = "https://unpkg.com/@daily-co/daily-js";
+
 const palette = ["#20c7b3", "#ff6b5f", "#f6c85f", "#8bb8ff", "#b98cff", "#7bd88f"];
 const CLIENT_ID = getOrCreateClientId();
 
@@ -90,6 +94,9 @@ const state = {
   roomId: "",
   userName: "",
   color: colorForId(CLIENT_ID),
+  dailyFrame: null,
+  dailyRoomUrl: "",
+  dailyLeaving: false,
   cameraTrack: null,
   audioTrack: null,
   screenTrack: null,
@@ -216,6 +223,8 @@ function bootstrap() {
   navigator.mediaDevices?.addEventListener?.("devicechange", refreshMediaDevices);
 
   window.addEventListener("beforeunload", () => {
+    state.dailyFrame?.leave?.();
+    state.dailyFrame?.destroy?.();
     state.transport?.leave?.(true);
     stopAllMedia();
   });
@@ -333,7 +342,7 @@ async function joinRoom(event) {
   }
 
   els.joinButton.disabled = true;
-  setJoinStatus("Abrindo microfone...");
+  setJoinStatus(usesDailyMedia() ? "Preparando chamada Daily..." : "Abrindo microfone...");
 
   state.serverId = serverId;
   state.serverName = resolvedServerName;
@@ -343,8 +352,12 @@ async function joinRoom(event) {
   saveServer({ id: serverId, name: resolvedServerName });
   renderSavedServers();
 
-  await prepareLocalMedia();
-  await refreshRtcConfig();
+  if (usesDailyMedia()) {
+    stopAllMedia();
+  } else {
+    await prepareLocalMedia();
+    await refreshRtcConfig();
+  }
 
   setJoinStatus("Conectando na sala...");
 
@@ -509,13 +522,23 @@ function createFirebaseTransport() {
 
         if (peer && peerMeta.sessionId && peer.sessionId && peer.sessionId !== peerMeta.sessionId) {
           removePeer(id, false);
-          createPeer(peerMeta, false);
+          if (usesDailyMedia()) {
+            upsertPresencePeer(peerMeta);
+          } else {
+            createPeer(peerMeta, false);
+          }
           renderPeople();
           continue;
         }
 
         if (!peer) {
           dispatchServerMessage({ type: "peer-joined", peer: peerMeta });
+          continue;
+        }
+
+        if (usesDailyMedia()) {
+          upsertPresencePeer(peerMeta);
+          renderPeople();
           continue;
         }
 
@@ -744,6 +767,13 @@ function dispatchServerMessage(message) {
   }
 
   if (message.type === "peer-joined") {
+    if (usesDailyMedia()) {
+      upsertPresencePeer(message.peer);
+      renderPeople();
+      toast(`${message.peer.name} entrou na sala.`);
+      return;
+    }
+
     createPeer(message.peer, false);
     renderPeople();
     toast(`${message.peer.name} entrou na sala.`);
@@ -757,6 +787,7 @@ function dispatchServerMessage(message) {
   }
 
   if (message.type === "signal") {
+    if (usesDailyMedia()) return;
     receiveSignal(message);
     return;
   }
@@ -770,7 +801,9 @@ function dispatchServerMessage(message) {
     const peer = state.peers.get(message.from);
     if (peer) {
       peer.mediaState = { ...peer.mediaState, ...message.state };
-      updateTile(peer.id);
+      if (!usesDailyMedia()) {
+        updateTile(peer.id);
+      }
       updateControls();
       renderPeople();
     }
@@ -1061,6 +1094,7 @@ function enterApp(message) {
   els.appScreen.hidden = false;
   els.joinScreen.classList.add("hidden");
   els.appScreen.classList.remove("hidden");
+  els.appScreen.classList.toggle("daily-provider", usesDailyMedia());
   els.roomLabel.textContent = state.channelName;
   els.serverNameLabel.textContent = state.serverName;
   els.serverCodeLabel.textContent = `Código: ${state.serverId}`;
@@ -1068,7 +1102,9 @@ function enterApp(message) {
   els.channelLabel.textContent = state.channelName;
   setConnectionStatus("connected", "Conectado");
   setJoinStatus("");
-  showRtcRelayStatus();
+  if (!usesDailyMedia()) {
+    showRtcRelayStatus();
+  }
 
   const url = new URL(window.location.href);
   url.searchParams.delete("room");
@@ -1077,15 +1113,25 @@ function enterApp(message) {
   window.history.replaceState({}, "", url);
 
   updateControls();
-  renderLocalTile();
+  if (!usesDailyMedia()) {
+    renderLocalTile();
+  }
   renderPeople();
-  sendMediaState();
 
-  for (const peer of message.peers || []) {
-    createPeer(peer, true);
+  if (usesDailyMedia()) {
+    for (const peer of message.peers || []) {
+      upsertPresencePeer(peer);
+    }
+    renderPeople();
+    startDailyCall();
+  } else {
+    sendMediaState();
+    for (const peer of message.peers || []) {
+      createPeer(peer, true);
+    }
+    startOutboundAudioMonitor();
   }
 
-  startOutboundAudioMonitor();
   els.messageInput.focus();
 }
 
@@ -1154,6 +1200,178 @@ function showRtcRelayStatus() {
   if (!hasTurn) {
     toast("Sem servidor TURN: algumas redes podem conectar sala e falhar audio entre amigos.");
   }
+}
+
+function usesDailyMedia() {
+  return MEDIA_PROVIDER === "daily";
+}
+
+function upsertPresencePeer(meta) {
+  if (!meta?.id || meta.id === state.selfId) return;
+
+  const existing = state.peers.get(meta.id) || {};
+  state.peers.set(meta.id, {
+    ...existing,
+    id: meta.id,
+    name: meta.name || existing.name || "Convidado",
+    sessionId: meta.sessionId || existing.sessionId || "",
+    color: meta.color || existing.color || palette[state.peers.size % palette.length],
+    lastSeenMs: meta.lastSeenMs || Date.now(),
+    mediaState: {
+      micEnabled: meta.mediaState?.micEnabled ?? existing.mediaState?.micEnabled ?? true,
+      cameraEnabled: meta.mediaState?.cameraEnabled ?? existing.mediaState?.cameraEnabled ?? false,
+      screenEnabled: meta.mediaState?.screenEnabled ?? existing.mediaState?.screenEnabled ?? false
+    }
+  });
+}
+
+async function startDailyCall() {
+  if (!els.dailyCallContainer || state.dailyFrame) return;
+
+  els.dailyCallContainer.hidden = false;
+  els.videoGrid.hidden = true;
+  setConnectionStatus("connecting", "Abrindo Daily");
+  setCallAudioStatus("Daily cuida do audio da chamada", "ok");
+
+  try {
+    const room = await getDailyRoom();
+    const DailyIframe = await loadDailySdk();
+
+    state.dailyRoomUrl = room.url;
+    els.dailyCallContainer.replaceChildren();
+
+    const frame = DailyIframe.createFrame(els.dailyCallContainer, {
+      iframeStyle: {
+        width: "100%",
+        height: "100%",
+        border: "0",
+        borderRadius: "8px",
+        background: "#0f0d0c"
+      },
+      showLeaveButton: false,
+      showFullscreenButton: true
+    });
+
+    state.dailyFrame = frame;
+
+    frame
+      .on("joined-meeting", () => {
+        setConnectionStatus("connected", "Conectado");
+        setCallAudioStatus("Chamada Daily conectada", "ok");
+      })
+      .on("left-meeting", () => {
+        state.dailyFrame = null;
+        if (state.joined && !state.dailyLeaving) {
+          leaveRoom();
+        }
+      })
+      .on("error", (event) => {
+        console.error("Daily error:", event);
+        toast("A chamada Daily encontrou um erro.");
+      });
+
+    await frame.join({
+      url: room.url,
+      userName: state.userName,
+      startVideoOff: true,
+      startAudioOff: false
+    });
+  } catch (error) {
+    console.error("Falha ao abrir Daily:", error);
+    setConnectionStatus("offline", "Daily indisponivel");
+    showDailyError(error);
+  }
+}
+
+async function getDailyRoom() {
+  const response = await fetch(`/api/daily-room?room=${encodeURIComponent(state.roomId)}`, {
+    cache: "no-store"
+  });
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok || !data.url) {
+    const error = new Error(data.error || "daily_room_failed");
+    error.code = data.error || "daily_room_failed";
+    throw error;
+  }
+
+  return data;
+}
+
+function loadDailySdk() {
+  const existing = window.DailyIframe || window.Daily;
+  if (existing?.createFrame) {
+    return Promise.resolve(existing);
+  }
+
+  return new Promise((resolve, reject) => {
+    const currentScript = document.querySelector(`script[src="${DAILY_JS_URL}"]`);
+
+    if (currentScript) {
+      currentScript.addEventListener("load", () => {
+        const DailyIframe = window.DailyIframe || window.Daily;
+        DailyIframe?.createFrame ? resolve(DailyIframe) : reject(new Error("daily_sdk_missing"));
+      }, { once: true });
+      currentScript.addEventListener("error", () => reject(new Error("daily_sdk_load_failed")), { once: true });
+      return;
+    }
+
+    const script = document.createElement("script");
+    script.src = DAILY_JS_URL;
+    script.crossOrigin = "anonymous";
+    script.onload = () => {
+      const DailyIframe = window.DailyIframe || window.Daily;
+      DailyIframe?.createFrame ? resolve(DailyIframe) : reject(new Error("daily_sdk_missing"));
+    };
+    script.onerror = () => reject(new Error("daily_sdk_load_failed"));
+    document.head.appendChild(script);
+  });
+}
+
+async function stopDailyCall() {
+  if (!state.dailyFrame) return;
+
+  state.dailyLeaving = true;
+  const frame = state.dailyFrame;
+  state.dailyFrame = null;
+
+  try {
+    await frame.leave?.();
+  } catch {}
+
+  try {
+    frame.destroy?.();
+  } catch {}
+
+  state.dailyLeaving = false;
+  state.dailyRoomUrl = "";
+  if (els.dailyCallContainer) {
+    els.dailyCallContainer.replaceChildren();
+    els.dailyCallContainer.hidden = true;
+  }
+  if (els.videoGrid) {
+    els.videoGrid.hidden = false;
+  }
+}
+
+function showDailyError(error) {
+  const message = error?.code === "daily_config_missing"
+    ? "Configure DAILY_API_KEY na Vercel para usar Daily."
+    : "Nao consegui abrir a sala Daily.";
+
+  els.dailyCallContainer.hidden = false;
+  els.dailyCallContainer.replaceChildren();
+
+  const panel = document.createElement("div");
+  panel.className = "daily-error";
+  const title = document.createElement("strong");
+  title.textContent = "Daily nao configurado";
+  const text = document.createElement("p");
+  text.textContent = message;
+  panel.append(title, text);
+  els.dailyCallContainer.appendChild(panel);
+  toast(message);
 }
 
 function createPeer(meta, shouldOffer) {
@@ -2163,7 +2381,7 @@ function renderPeople() {
 
 function createPersonRow(person) {
   const isLocal = person.id === "local" || person.isLocal;
-  const isOpen = state.selectedPeerId === person.id && !isLocal;
+  const isOpen = state.selectedPeerId === person.id && !isLocal && !usesDailyMedia();
   const prefs = isLocal ? null : getPeerAudioPrefs(person.id);
 
   const card = document.createElement("div");
@@ -2171,10 +2389,11 @@ function createPersonRow(person) {
   card.classList.toggle("open", isOpen);
   card.classList.toggle("remote-muted", Boolean(prefs?.muted));
 
-  const row = document.createElement(isLocal ? "div" : "button");
+  const row = document.createElement(isLocal || usesDailyMedia() ? "div" : "button");
   row.className = "person-row";
   row.classList.toggle("is-local", isLocal);
-  if (!isLocal) {
+  row.classList.toggle("compact", usesDailyMedia());
+  if (!isLocal && !usesDailyMedia()) {
     row.type = "button";
     row.dataset.peerRow = person.id;
     row.setAttribute("aria-expanded", String(isOpen));
@@ -2191,17 +2410,22 @@ function createPersonRow(person) {
   name.textContent = person.name;
   const meta = document.createElement("div");
   meta.className = "person-meta";
-  meta.textContent = person.mediaState?.screenEnabled ? "Compartilhando tela" : "Na chamada";
+  meta.textContent = usesDailyMedia()
+    ? "Na chamada Daily"
+    : (person.mediaState?.screenEnabled ? "Compartilhando tela" : "Na chamada");
   text.append(name, meta);
 
-  const stateIcons = document.createElement("div");
-  stateIcons.className = "mini-state";
-  stateIcons.append(
-    createMiniState("M", person.mediaState?.micEnabled),
-    createMiniState("C", person.mediaState?.cameraEnabled || person.mediaState?.screenEnabled)
-  );
+  row.append(avatar, text);
 
-  row.append(avatar, text, stateIcons);
+  if (!usesDailyMedia()) {
+    const stateIcons = document.createElement("div");
+    stateIcons.className = "mini-state";
+    stateIcons.append(
+      createMiniState("M", person.mediaState?.micEnabled),
+      createMiniState("C", person.mediaState?.cameraEnabled || person.mediaState?.screenEnabled)
+    );
+    row.appendChild(stateIcons);
+  }
   card.append(row);
 
   if (isOpen) {
@@ -2355,8 +2579,8 @@ function removePeer(peerId, showToast = true) {
   const peer = state.peers.get(peerId);
   if (peer) {
     cancelPeerReconnect(peer);
-    peer.pc.close();
-    peer.remoteStream.getTracks().forEach((track) => track.stop());
+    peer.pc?.close?.();
+    peer.remoteStream?.getTracks?.().forEach((track) => track.stop());
     clearPeerAudioStats(peerId);
     state.peers.delete(peerId);
     if (state.selectedPeerId === peerId) {
@@ -2395,6 +2619,13 @@ function clearPeerAudioStats(peerId) {
 function updateControls() {
   const noiseSupported = supportsNoiseSuppression();
   const hasRemoteScreen = [...state.peers.values()].some((peer) => peer.mediaState?.screenEnabled);
+
+  if (usesDailyMedia()) {
+    els.reconnectButton.disabled = true;
+    els.remoteScreensButton.hidden = true;
+    updateMicMonitorDisplay();
+    return;
+  }
 
   els.micButton.classList.toggle("active", state.micEnabled);
   els.micButton.classList.toggle("off", !state.micEnabled);
@@ -2803,6 +3034,7 @@ async function copyInviteLink() {
 }
 
 async function leaveRoom() {
+  await stopDailyCall();
   await state.transport?.leave?.();
   state.transport = null;
 
